@@ -1,3 +1,4 @@
+// AI Recruiter Adoption Report Script
 /**
  * AI Interview Report Generator - Google Apps Script version : Gemini 2.17 - % Inline with Name
  * * This script analyzes candidate data in a Google Sheet to generate insights about AI interview adoption,
