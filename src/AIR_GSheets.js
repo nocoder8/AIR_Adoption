@@ -665,7 +665,7 @@ function createHtmlReport(reportData) {
             <p class="note" style="font-size: 12.5px; color: #555; margin-top: 5px;"><em>Example:</em> A recruiter has 12 applications:</p>
              <ul class="note" style="font-size: 12.5px; color: #555; margin: 0 0 8px 15px; padding-left: 15px; list-style-type: disc;">
                  <li style="margin-bottom: 3px;">4 do not match the job at all so much so that an AI Screening is not warranted at all. These applications have been rejected by the Recruiter. <span style="color: #990000;">&rarr; These 4 are excluded from the analysis.</span></li>
-                 <li style="margin-bottom: 3px;">3 took the AI Screening.</li>
+                 <li style="margin-bottom: 3px;">3 took the AI Screening. <span style="color: #006400;">&rarr; Included as Eligible</span></li>
                  <li>5 are 'Active' without an AI Screening and can be given an AI screening. <span style="color: #006400;">&rarr; Included as Eligible</span></li>
              </ul>
             <p class="note" style="font-size: 12.5px; color: #555; margin: 0;">The calculation uses these 8 Eligible Candidates (3 who took screening + 5 'Active' without screening). The adoption rate is 3 / 8 = 37.5%.</p>
