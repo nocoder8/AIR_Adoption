@@ -1,0 +1,7 @@
+=IF(O2="CONFIRMED", 
+    IF(N2>NOW(), "SCHEDULED", 
+        IF(OR(T2="SUBMITTED", T2="AI_RECOMMENDED"), "COMPLETED", 
+            IF(T2="REQUESTED", "Candidate no-show", O2)
+        )
+    ), 
+    O2)

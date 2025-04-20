@@ -17,6 +17,8 @@ const EMAIL_RECIPIENT = 'pkumar@eightfold.ai';
 const EMAIL_CC = 'pkumar@eightfold.ai';
 const SHEET_NAME = 'Active+Rejected'; // Sheet name corrected
 const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1g-Sp4_Ic91eXT9LeVwDJjRiMa5Xqf4Oks3aV29fxXRw/edit?gid=1957093905#gid=1957093905';
+const LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit?gid=602557471#gid=602557471'; // URL for the Log_Enhanced sheet
+const LOG_SHEET_NAME = 'Log_Enhanced'; // Name of the Log_Enhanced sheet
 // >>> IMPORTANT: Please double-check this LAUNCH_DATE is correct for your needs <<<
 const LAUNCH_DATE = new Date('2025-04-17'); // AI Recruiter launch date
 
@@ -152,7 +154,7 @@ function generateAndSendAIReport() {
 
 
     // Verify required columns exist
-    const requiredColumns = ['Last_stage', 'Ai_interview', 'Recruiter name', 'Title', 'Application_status', 'Position_status', 'Application_ts'];
+    const requiredColumns = ['Profile_id', 'Last_stage', 'Ai_interview', 'Recruiter name', 'Title', 'Application_status', 'Position_status', 'Application_ts'];
     const missingCols = [];
     const colIndices = {};
 
@@ -169,6 +171,11 @@ function generateAndSendAIReport() {
       throw new Error(`Required column(s) not found in the sheet headers (Row 2): ${missingCols.join(', ')}`);
     }
     Logger.log("All required columns found.");
+
+    // --- Get Interview Sent Times ---
+    const interviewSentMap = getInterviewSentTimes();
+    Logger.log(`Retrieved ${interviewSentMap.size} unique profile IDs with interview sent times.`);
+    // --- End Get Interview Sent Times ---
 
 
     // First segment all candidates by application date - without any status filters
@@ -225,9 +232,9 @@ function generateAndSendAIReport() {
     Logger.log(`Post-launch candidates used in report (no status filter): ${postLaunchAllCandidates.length}`);
 
     // Generate metrics for different segments
-    const preLaunchMetrics = generateSegmentMetrics(preLaunchActiveCandidates, colIndices, matchStarsColIndex, false); // No score filter needed for pre-launch view
-    const postLaunchMetrics = generateSegmentMetrics(postLaunchAllCandidates, colIndices, matchStarsColIndex, false); // All post-launch
-    const postLaunchMatchScore4Metrics = generateSegmentMetrics(postLaunchAllCandidates, colIndices, matchStarsColIndex, true, 4); // Post-launch with score filter >= 4
+    const preLaunchMetrics = generateSegmentMetrics(preLaunchActiveCandidates, colIndices, matchStarsColIndex, false, 0, new Map()); // No score filter, no sent times needed for pre-launch view
+    const postLaunchMetrics = generateSegmentMetrics(postLaunchAllCandidates, colIndices, matchStarsColIndex, false, 0, interviewSentMap); // All post-launch
+    const postLaunchMatchScore4Metrics = generateSegmentMetrics(postLaunchAllCandidates, colIndices, matchStarsColIndex, true, 4, interviewSentMap); // Post-launch with score filter >= 4
 
     // Prepare combined report data
     const reportData = {
@@ -268,9 +275,10 @@ function generateAndSendAIReport() {
  * @param {number} matchStarsColIndex Index of the match score column, or -1 if not found.
  * @param {boolean} applyMatchFilter Whether to apply the match score filter.
  * @param {number} matchScoreThreshold The minimum score for the match filter (e.g., 4).
+ * @param {Map<string, Date>} interviewSentMap A map of Profile ID to Interview Sent Date.
  * @returns {Object} An object containing metrics for the segment.
  */
-function generateSegmentMetrics(candidates, colIndices, matchStarsColIndex, applyMatchFilter, matchScoreThreshold = 0) {
+function generateSegmentMetrics(candidates, colIndices, matchStarsColIndex, applyMatchFilter, matchScoreThreshold = 0, interviewSentMap) {
     let filteredCandidates = candidates;
     let filterApplied = false;
 
@@ -353,9 +361,27 @@ function generateSegmentMetrics(candidates, colIndices, matchStarsColIndex, appl
         if (isEligible) {
             eligibleCandidateCount++;
             if (!recruiterMap[recruiter]) {
-                recruiterMap[recruiter] = { totalEligible: 0, taken: 0 };
+                recruiterMap[recruiter] = { totalEligible: 0, taken: 0, timeDiffSumMs: 0, timeDiffCount: 0 }; // Added time diff fields
             }
             recruiterMap[recruiter].totalEligible++;
+
+            // --- Calculate Time to Invite Sent ---
+            const profileId = row.length > colIndices['Profile_id'] ? row[colIndices['Profile_id']]?.toString().trim() : null;
+            const rawAppDate = row.length > colIndices['Application_ts'] ? row[colIndices['Application_ts']] : null;
+            const appDate = (rawAppDate && !isNaN(new Date(rawAppDate).getTime())) ? new Date(rawAppDate) : null;
+            const sentAtDate = (profileId && interviewSentMap.has(profileId)) ? interviewSentMap.get(profileId) : null;
+
+            if (appDate && sentAtDate) {
+               const timeDiffMs = sentAtDate.getTime() - appDate.getTime();
+               if (timeDiffMs >= 0) { // Only consider non-negative differences
+                   recruiterMap[recruiter].timeDiffSumMs += timeDiffMs;
+                   recruiterMap[recruiter].timeDiffCount++;
+                   // Logger.log(`Valid time diff for ${profileId}: ${timeDiffMs / (1000 * 60 * 60 * 24)} days`); // Optional detail log
+               } else {
+                   // Logger.log(`Negative time diff for ${profileId} - Sent: ${sentAtDate}, Applied: ${appDate}`); // Log if needed
+               }
+            } // else { Logger.log(`Missing appDate or sentAtDate for ${profileId}`); }
+            // --- End Calculate Time to Invite Sent ---
 
             if (tookAI) {
                 eligibleTakenAICount++;
@@ -380,11 +406,16 @@ function generateSegmentMetrics(candidates, colIndices, matchStarsColIndex, appl
         const data = recruiterMap[recruiter];
         // Calculate adoption rate PER RECRUITER based on their eligible candidates
         const adoptionRate = data.totalEligible > 0 ? parseFloat(((data.taken / data.totalEligible) * 100).toFixed(1)) : 0;
+        // Calculate average time to invite in days
+        const avgTimeMs = data.timeDiffCount > 0 ? (data.timeDiffSumMs / data.timeDiffCount) : null;
+        const avgTimeToInviteDays = avgTimeMs !== null ? parseFloat((avgTimeMs / (1000 * 60 * 60 * 24)).toFixed(1)) : null;
+
         return {
             recruiter: recruiter,
             totalCandidates: data.totalEligible, // This now represents ELIGIBLE candidates for the recruiter
             takenAI: data.taken,
-            adoptionRate: adoptionRate
+            adoptionRate: adoptionRate,
+            avgTimeToInviteDays: avgTimeToInviteDays // Added average time
         };
     });
 
@@ -669,6 +700,43 @@ function createHtmlReport(reportData) {
                  <li>5 are 'Active' without an AI Screening and can be given an AI screening. <span style="color: #006400;">&rarr; Included as Eligible</span></li>
              </ul>
             <p class="note" style="font-size: 12.5px; color: #555; margin: 0;">The calculation uses these 8 Eligible Candidates (3 who took screening + 5 'Active' without screening). The adoption rate is 3 / 8 = 37.5%.</p>
+        </div>
+
+        <div class="report-section" style="margin-top: 20px;">
+          <h4 style="margin-top: 0; margin-bottom: 10px; color: #333; font-size: 14px;">Average Time from Application to AI Interview Sent (Post-Launch)</h4>
+          <p class="note" style="font-size: 12.5px; color: #555; margin: 0 0 10px 0;">This metric shows the average time (in days) between when a candidate's application was received and when their AI screening interview invitation was sent, calculated for eligible post-launch candidates who received an invite.</p>
+          <div style="max-width: 500px; margin: 0 auto;">
+             <table class="leaderboard-table" style="width: 100%; font-size: 13px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden;">
+                <thead style="border-bottom: 2px solid #ccc;">
+                  <tr>
+                    <th>Recruiter</th>
+                    <th style="width: 150px; text-align: center;">Avg. Time to Send (Days)</th>
+                  </tr>
+                </thead>
+                <tbody>`;
+
+          // Sort recruiters based on the main post-launch data for consistency
+          const sortedRecruiters = reportData.postLaunch.recruiterData.slice().sort((a, b) => a.recruiter.localeCompare(b.recruiter));
+          let foundTimeData = false;
+
+          sortedRecruiters.forEach(row => {
+            const timeDisplay = row.avgTimeToInviteDays !== null ? `${row.avgTimeToInviteDays} days` : 'N/A';
+            if (row.avgTimeToInviteDays !== null) foundTimeData = true;
+            html += `
+                      <tr style="height: 32px;">
+                        <td data-label="Recruiter" style="font-weight: bold;">${row.recruiter}</td>
+                        <td data-label="Avg. Time (Days)" style="text-align: center;">${timeDisplay}</td>
+                      </tr>`;
+          });
+
+           if (!foundTimeData) {
+             html += `<tr><td colspan="2" data-label="Status" style="text-align: center; padding: 15px; color: #777;">No interview sent time data found for post-launch candidates.</td></tr>`;
+           }
+
+          html += `
+                </tbody>
+              </table>
+          </div>
         </div>
 
         <div class="report-section" style="text-align: center; margin: 25px 0; padding: 20px; background-color: #e9f5ff; border-radius: 5px; border: 1px solid #b3daff;">
@@ -1109,7 +1177,6 @@ function debugAkhilaCandidates() { // Consider renaming or making recruiter dyna
   }
 }
 
-
 /**
  * Creates a menu item in the Google Sheet UI
  */
@@ -1127,4 +1194,93 @@ function onOpen() {
       Logger.log("Error creating menu: " + e);
       // Don't throw error here as it might prevent sheet from opening properly
   }
+}
+
+/**
+ * Reads the interview log sheet and returns a map of Profile ID to the earliest interview sent date.
+ * @returns {Map<string, Date>} A map where keys are profile IDs and values are Date objects.
+ */
+function getInterviewSentTimes() {
+  const interviewSentMap = new Map();
+  Logger.log(`--- Starting getInterviewSentTimes ---`);
+  try {
+    const spreadsheet = SpreadsheetApp.openByUrl(LOG_SHEET_SPREADSHEET_URL);
+    Logger.log(`Opened log spreadsheet: ${spreadsheet.getName()}`);
+    let sheet = spreadsheet.getSheetByName(LOG_SHEET_NAME);
+
+    // Sheet finding logic (similar to main function)
+    if (!sheet) {
+      Logger.log(`Log sheet "${LOG_SHEET_NAME}" not found by name. Attempting to use sheet by gid or first sheet.`);
+      const gidMatch = LOG_SHEET_SPREADSHEET_URL.match(/gid=(\d+)/);
+      if (gidMatch && gidMatch[1]) {
+        const gid = gidMatch[1];
+        const sheets = spreadsheet.getSheets();
+        sheet = sheets.find(s => s.getSheetId().toString() === gid);
+        if (sheet) Logger.log(`Using log sheet by ID: "${sheet.getName()}"`);
+      }
+      if (!sheet) {
+        sheet = spreadsheet.getSheets()[0];
+        if (sheet) {
+          Logger.log(`Warning: Using first available sheet in log spreadsheet: "${sheet.getName()}"`);
+        } else {
+          throw new Error(`Could not find any sheets in the log spreadsheet: ${LOG_SHEET_SPREADSHEET_URL}`);
+        }
+      }
+    }
+     else {
+        Logger.log(`Using specified log sheet: "${sheet.getName()}"`);
+     }
+
+    const dataRange = sheet.getDataRange();
+    const data = dataRange.getValues();
+
+    if (data.length < 2) { // Need at least header row and one data row
+      Logger.log(`Not enough data in log sheet "${sheet.getName()}". Found ${data.length} rows. Skipping time-to-send calculation.`);
+      return interviewSentMap; // Return empty map
+    }
+
+    // Assume headers are in Row 1 (index 0) for this log sheet
+    const headers = data[0].map(String);
+    const profileIdColIndex = headers.indexOf('Profile_id');
+    const sentAtColIndex = headers.indexOf('Interview_email_sent_at');
+
+    if (profileIdColIndex === -1 || sentAtColIndex === -1) {
+      throw new Error(`Required column(s) not found in log sheet headers (Row 1): ${profileIdColIndex === -1 ? 'Profile_id' : ''}${profileIdColIndex === -1 && sentAtColIndex === -1 ? ', ' : ''}${sentAtColIndex === -1 ? 'Interview_email_sent_at' : ''}`);
+    }
+    Logger.log(`Log sheet headers found: Profile_id at index ${profileIdColIndex}, Interview_email_sent_at at index ${sentAtColIndex}`);
+
+    const rows = data.slice(1); // Data starts from row 2 (index 1)
+    let processedCount = 0;
+    let validDateCount = 0;
+
+    rows.forEach((row, idx) => {
+      if (row.length > Math.max(profileIdColIndex, sentAtColIndex)) {
+        const profileId = row[profileIdColIndex]?.toString().trim(); // Ensure string and trim whitespace
+        const rawSentAt = row[sentAtColIndex];
+
+        if (profileId && rawSentAt !== null && rawSentAt !== undefined && rawSentAt !== '') {
+          const sentAtDate = new Date(rawSentAt);
+          if (!isNaN(sentAtDate.getTime())) {
+            validDateCount++;
+            // If we haven't seen this profileId, or if this date is earlier than the stored one
+            if (!interviewSentMap.has(profileId) || sentAtDate < interviewSentMap.get(profileId)) {
+              interviewSentMap.set(profileId, sentAtDate);
+            }
+          } else {
+            // Logger.log(`Invalid date format for Interview_email_sent_at in log sheet row ${idx + 2}: ${rawSentAt}`); // Potentially noisy
+          }
+          processedCount++;
+        }
+      }
+    });
+
+    Logger.log(`Processed ${processedCount} rows from log sheet. Found ${validDateCount} valid send dates. Stored earliest date for ${interviewSentMap.size} unique Profile IDs.`);
+
+  } catch (error) {
+    Logger.log(`Error in getInterviewSentTimes: ${error.toString()} Stack: ${error.stack}`);
+    // Don't throw error, just return empty map so main report can still run
+    SpreadsheetApp.getUi().alert(`Warning: Could not process the Interview Log sheet. Time-to-send metrics will be unavailable. Error: ${error.message}`);
+  }
+  Logger.log(`--- Finished getInterviewSentTimes ---`);
+  return interviewSentMap;
 }
