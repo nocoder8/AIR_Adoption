@@ -3,13 +3,13 @@
 // into the AI interview process funnel, timelines, and outcomes.
 
 // --- Configuration ---
-const EMAIL_RECIPIENT = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
-const EMAIL_CC = ''; // Optional CC
+const VS_EMAIL_RECIPIENT = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_CC = ''; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
-const LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
-const LOG_SHEET_NAME = 'Log_Enhanced'; // <<< VERIFY SHEET NAME
-const REPORT_TIME_RANGE_DAYS = 90; // Default time range (days back) for the report
-const COMPANY_NAME = "Eightfold"; // Used in report titles etc.
+const VS_LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
+const VS_LOG_SHEET_NAME = 'Log_Enhanced'; // <<< VERIFY SHEET NAME
+const VS_REPORT_TIME_RANGE_DAYS = 90; // Default time range (days back) for the report
+const VS_COMPANY_NAME = "Eightfold"; // Used in report titles etc.
 
 
 // --- Main Functions ---
@@ -32,7 +32,7 @@ function createVolkscienceTrigger() {
     .atHour(8)
     .create();
   Logger.log(`Weekly trigger created for generateAndSendVolkscienceReport (Monday 8 AM)`);
-  SpreadsheetApp.getUi().alert(`Weekly trigger created for ${COMPANY_NAME} AI Interview Report (Monday 8 AM).`);
+  SpreadsheetApp.getUi().alert(`Weekly trigger created for ${VS_COMPANY_NAME} AI Interview Report (Monday 8 AM).`);
 }
 
 /**
@@ -40,14 +40,14 @@ function createVolkscienceTrigger() {
  */
 function generateAndSendVolkscienceReport() {
   try {
-    Logger.log(`--- Starting ${COMPANY_NAME} AI Interview Report Generation ---`);
+    Logger.log(`--- Starting ${VS_COMPANY_NAME} AI Interview Report Generation ---`);
 
     // 1. Get Log Sheet Data
     const logData = getLogSheetData();
     if (!logData || !logData.rows || logData.rows.length === 0) {
       Logger.log('No data found in the log sheet or required columns missing. Skipping report generation.');
       // Optional: Send an email notification about missing data/columns
-      // sendErrorNotification("Report Skipped: No data or required columns found in Log_Enhanced sheet.");
+      // sendVsErrorNotification("Report Skipped: No data or required columns found in Log_Enhanced sheet.");
       return;
     }
      Logger.log(`Successfully retrieved ${logData.rows.length} rows from log sheet.`);
@@ -55,10 +55,10 @@ function generateAndSendVolkscienceReport() {
     // 2. Filter Data by Time Range (using Interview_email_sent_at)
     const filteredData = filterDataByTimeRange(logData.rows, logData.colIndices);
     if (filteredData.length === 0) {
-        Logger.log(`No data found within the last ${REPORT_TIME_RANGE_DAYS} days. Skipping report.`);
+        Logger.log(`No data found within the last ${VS_REPORT_TIME_RANGE_DAYS} days. Skipping report.`);
         return;
     }
-    Logger.log(`Filtered data to ${filteredData.length} rows based on the last ${REPORT_TIME_RANGE_DAYS} days.`);
+    Logger.log(`Filtered data to ${filteredData.length} rows based on the last ${VS_REPORT_TIME_RANGE_DAYS} days.`);
 
     // 2b. Filter out specific Position Names
     const positionNameIndex = logData.colIndices.hasOwnProperty('Position_name') ? logData.colIndices['Position_name'] : -1;
@@ -90,16 +90,16 @@ function generateAndSendVolkscienceReport() {
     Logger.log('Successfully generated HTML report content.');
 
     // 5. Send Email
-    const reportTitle = `${COMPANY_NAME} AI Interview Report - Last ${REPORT_TIME_RANGE_DAYS} Days (${new Date().toLocaleDateString()})`;
-    sendVolkscienceEmail(EMAIL_RECIPIENT, EMAIL_CC, reportTitle, htmlContent);
+    const reportTitle = `${VS_COMPANY_NAME} AI Interview Report - Last ${VS_REPORT_TIME_RANGE_DAYS} Days (${new Date().toLocaleDateString()})`;
+    sendVolkscienceEmail(VS_EMAIL_RECIPIENT, VS_EMAIL_CC, reportTitle, htmlContent);
 
-    Logger.log(`--- ${COMPANY_NAME} AI Interview Report generated and sent successfully! ---`);
-    return `Report sent to ${EMAIL_RECIPIENT}`;
+    Logger.log(`--- ${VS_COMPANY_NAME} AI Interview Report generated and sent successfully! ---`);
+    return `Report sent to ${VS_EMAIL_RECIPIENT}`;
 
   } catch (error) {
     Logger.log(`Error in generateAndSendVolkscienceReport: ${error.toString()} Stack: ${error.stack}`);
     // Send error email
-    sendErrorNotification(`ERROR generating ${COMPANY_NAME} AI Report: ${error.toString()}`, error.stack);
+    sendVsErrorNotification(`ERROR generating ${VS_COMPANY_NAME} AI Report: ${error.toString()}`, error.stack);
     return `Error: ${error.toString()}`;
   }
 }
@@ -111,22 +111,22 @@ function generateAndSendVolkscienceReport() {
  * @returns {object|null} Object { rows: Array<Array>, headers: Array<string>, colIndices: object } or null if error/no sheet/missing columns.
  */
 function getLogSheetData() {
-  Logger.log(`Attempting to open log spreadsheet: ${LOG_SHEET_SPREADSHEET_URL}`);
+  Logger.log(`Attempting to open log spreadsheet: ${VS_LOG_SHEET_SPREADSHEET_URL}`);
   let spreadsheet;
   try {
-    spreadsheet = SpreadsheetApp.openByUrl(LOG_SHEET_SPREADSHEET_URL);
+    spreadsheet = SpreadsheetApp.openByUrl(VS_LOG_SHEET_SPREADSHEET_URL);
     Logger.log(`Opened log spreadsheet: ${spreadsheet.getName()}`);
   } catch (e) {
     Logger.log(`Error opening log spreadsheet by URL: ${e}`);
-    throw new Error(`Could not open the specified Log Spreadsheet URL. Please verify the URL is correct and accessible: ${LOG_SHEET_SPREADSHEET_URL}`);
+    throw new Error(`Could not open the specified Log Spreadsheet URL. Please verify the URL is correct and accessible: ${VS_LOG_SHEET_SPREADSHEET_URL}`);
   }
 
-  let sheet = spreadsheet.getSheetByName(LOG_SHEET_NAME);
+  let sheet = spreadsheet.getSheetByName(VS_LOG_SHEET_NAME);
 
   // Fallback sheet finding logic (like in AIR_Gsheets)
   if (!sheet) {
-    Logger.log(`Log sheet "${LOG_SHEET_NAME}" not found by name. Attempting to use sheet by gid or first sheet.`);
-    const gidMatch = LOG_SHEET_SPREADSHEET_URL.match(/gid=(\d+)/);
+    Logger.log(`Log sheet "${VS_LOG_SHEET_NAME}" not found by name. Attempting to use sheet by gid or first sheet.`);
+    const gidMatch = VS_LOG_SHEET_SPREADSHEET_URL.match(/gid=(\d+)/);
     if (gidMatch && gidMatch[1]) {
       const gid = gidMatch[1];
       const sheets = spreadsheet.getSheets();
@@ -138,7 +138,7 @@ function getLogSheetData() {
       if (sheet) {
         Logger.log(`Warning: Using first available sheet in log spreadsheet: "${sheet.getName()}"`);
       } else {
-        throw new Error(`Could not find any sheets in the log spreadsheet: ${LOG_SHEET_SPREADSHEET_URL}`);
+        throw new Error(`Could not find any sheets in the log spreadsheet: ${VS_LOG_SHEET_SPREADSHEET_URL}`);
       }
     }
   } else {
@@ -218,7 +218,7 @@ function filterDataByTimeRange(rows, colIndices) {
 
   const sentAtIndex = colIndices['Interview_email_sent_at'];
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - REPORT_TIME_RANGE_DAYS);
+  cutoffDate.setDate(cutoffDate.getDate() - VS_REPORT_TIME_RANGE_DAYS);
   const cutoffTimestamp = cutoffDate.getTime();
 
   Logger.log(`Filtering data for interviews sent on or after ${cutoffDate.toLocaleDateString()}`);
@@ -226,7 +226,7 @@ function filterDataByTimeRange(rows, colIndices) {
   const filteredRows = rows.filter(row => {
     if (row.length <= sentAtIndex) return false; // Skip short rows
     const rawDate = row[sentAtIndex];
-    const sentDate = parseDateSafe(rawDate);
+    const sentDate = vsParseDateSafe(rawDate);
     return sentDate && sentDate.getTime() >= cutoffTimestamp;
   });
 
@@ -242,7 +242,7 @@ function filterDataByTimeRange(rows, colIndices) {
  */
 function calculateCompanyMetrics(filteredRows, colIndices) {
   const metrics = {
-    reportStartDate: (() => { const d = new Date(); d.setDate(d.getDate() - REPORT_TIME_RANGE_DAYS); return d.toLocaleDateString(); })(),
+    reportStartDate: (() => { const d = new Date(); d.setDate(d.getDate() - VS_REPORT_TIME_RANGE_DAYS); return d.toLocaleDateString(); })(),
     reportEndDate: new Date().toLocaleDateString(),
     totalSent: filteredRows.length, // This now reflects rows after time and position filters
     totalScheduled: 0,
@@ -265,8 +265,8 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     matchStarsCount: 0,
     // Breakdowns
     completionRateByJobFunction: {}, // { "JobFunc": { completed: 0, totalConsidered: 0 } }
-    avgTimeToFeedbackByCountry: {}, // { "Country": { sumDays: 0, count: 0 } }
-    interviewStatusDistribution: {}, // { "Status": count }
+    avgTimeToFeedbackByCountry: {}, // { "Country": { sumDays: 0, count: 0 } } // Placeholder, complex
+    interviewStatusDistribution: {}, // { "Status": { count: X, percentage: Y } }
     // Raw data storage for breakdowns
     byJobFunction: {}, // { "JobFunc": { sent: 0, scheduled: 0, completed: 0, feedback: 0, durationSum: 0, durationCount: 0, statusCounts: {} } }
     byCountry: {},     // { "Country": { sent: 0, scheduled: 0, completed: 0, feedback: 0, statusCounts: {} } }
@@ -292,14 +292,12 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const jobFuncIdx = colIndices.hasOwnProperty('Job_function') ? colIndices['Job_function'] : -1;
   const countryIdx = colIndices.hasOwnProperty('Location_country') ? colIndices['Location_country'] : -1;
 
-  // TODO: Define what statuses count as "Scheduled" and "Completed"
-  // Example: const scheduledStatuses = ['Scheduled', 'Invited', 'Confirmed']; // Adjust as needed
   const completedStatuses = COMPLETED_STATUSES; // Using defined constant
   const feedbackSubmittedStatus = FEEDBACK_SUBMITTED_STATUS; // Using defined constant
 
   filteredRows.forEach(row => {
     // --- Get Sent Date for Timeseries ---
-    const sentDate = parseDateSafe(row[sentAtIdx]);
+    const sentDate = vsParseDateSafe(row[sentAtIdx]);
     if (sentDate) {
         const dateString = sentDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
         metrics.dailySentCounts[dateString] = (metrics.dailySentCounts[dateString] || 0) + 1;
@@ -325,6 +323,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     // Every row in filteredRows represents a 'sent' interview
     metrics.byJobFunction[jobFunc].sent++;
     metrics.byCountry[country].sent++;
+    // Store raw status counts before calculating percentages later
     metrics.interviewStatusDistribution[statusRaw] = (metrics.interviewStatusDistribution[statusRaw] || 0) + 1;
     metrics.byJobFunction[jobFunc].statusCounts[statusRaw] = (metrics.byJobFunction[jobFunc].statusCounts[statusRaw] || 0) + 1;
     metrics.byCountry[country].statusCounts[statusRaw] = (metrics.byCountry[country].statusCounts[statusRaw] || 0) + 1;
@@ -334,7 +333,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     let isScheduled = SCHEDULED_STATUSES.includes(statusLower);
     let scheduleDate = null;
     if (scheduledAtIdx !== -1) {
-        scheduleDate = parseDateSafe(row[scheduledAtIdx]);
+        scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
         if (scheduleDate) {
             isScheduled = true; // If date exists, consider it scheduled regardless of status list (safer)
         }
@@ -346,7 +345,8 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        metrics.byCountry[country].scheduled++;
 
        // --- Calculate Sent to Scheduled Time ---
-       const daysDiff = calculateDaysDifference(sentDate, scheduleDate); // Use parsed scheduleDate and sentDate
+       // Use the sentDate parsed earlier
+       const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate); // Use parsed scheduleDate and sentDate
        if (daysDiff !== null) {
          metrics.sentToScheduledDaysSum += daysDiff;
          metrics.sentToScheduledCount++;
@@ -382,7 +382,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        }
 
        // --- Check for Feedback Submitted (only if completed) ---
-       if (feedbackStatusIdx !== -1 && row[feedbackStatusIdx] === feedbackSubmittedStatus) {
+       if (feedbackStatusIdx !== -1 && feedbackStatusLower === feedbackSubmittedStatus) { // Use lowercase compare
          metrics.totalFeedbackSubmitted++;
          metrics.byJobFunction[jobFunc].feedback++;
          metrics.byCountry[country].feedback++;
@@ -393,7 +393,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
          // Placeholder:
          // const completedDate = ... ; // Infer completion date
          // const feedbackDate = ... ; // Infer feedback submission date
-         // const feedbackDaysDiff = calculateDaysDifference(completedDate, feedbackDate);
+         // const feedbackDaysDiff = vsCalculateDaysDifference(completedDate, feedbackDate);
          // if (feedbackDaysDiff !== null) {
          //    metrics.completedToFeedbackDaysSum += feedbackDaysDiff;
          //    metrics.completedToFeedbackCount++;
@@ -407,8 +407,10 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   if (metrics.totalSent > 0) {
       metrics.sentToScheduledRate = parseFloat(((metrics.totalScheduled / metrics.totalSent) * 100).toFixed(1));
       // Calculate percentages for status distribution
-      for (const status in metrics.interviewStatusDistribution) {
-          const count = metrics.interviewStatusDistribution[status];
+      const statusCountsTemp = { ...metrics.interviewStatusDistribution }; // Copy raw counts
+      metrics.interviewStatusDistribution = {}; // Reset to store objects
+      for (const status in statusCountsTemp) {
+          const count = statusCountsTemp[status];
           metrics.interviewStatusDistribution[status] = {
               count: count,
               percentage: parseFloat(((count / metrics.totalSent) * 100).toFixed(1))
@@ -432,7 +434,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
         metrics.avgInterviewDuration = parseFloat((metrics.durationMinutesSum / metrics.durationCount).toFixed(1));
     }
    // if (metrics.completedToFeedbackCount > 0) {
-   //     metrics.avgCompletedToFeedbackDays = parseFloat((metrics.completedToFeedbackDaysSum / metrics.completedToFeedbackCount).toFixed(1));
+   //     metrics.avgCompletedToFeedbackDays = parseFloat((vsCalculateDaysDifference(completedDate, feedbackDate) / metrics.completedToFeedbackCount).toFixed(1)); // Example
    // }
 
 
@@ -467,8 +469,6 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
  * @returns {string} The HTML content for the email body.
  */
 function createVolkscienceHtmlReport(metrics) {
-  // TODO: Enhance styling, add charts (can be complex in email), improve layout.
-  // Use CSS similar to AIR_Gsheets report for consistency if desired.
 
   // --- Helper to generate timeseries table ---
   const generateTimeseriesTable = (dailyCounts) => {
@@ -488,7 +488,7 @@ function createVolkscienceHtmlReport(metrics) {
   <!DOCTYPE html>
   <html>
   <head>
-    <title>${COMPANY_NAME} AI Interview Report</title>
+    <title>${VS_COMPANY_NAME} AI Interview Report</title>
     <style>
       body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; }
       .container { max-width: 800px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; background-color: #ffffff; }
@@ -520,7 +520,7 @@ function createVolkscienceHtmlReport(metrics) {
   </head>
   <body>
     <div class="container">
-      <h1>${COMPANY_NAME} AI Interview Report</h1>
+      <h1>${VS_COMPANY_NAME} AI Interview Report</h1>
       <p style="text-align: center; margin-top: -15px; margin-bottom: 25px; color: #555;">
         Data from ${metrics.reportStartDate} to ${metrics.reportEndDate} (Based on Interview Sent Date)
       </p>
@@ -564,35 +564,22 @@ function createVolkscienceHtmlReport(metrics) {
       <h2>Interview Status Distribution</h2>
       <div class="metric-block">
           <div class="section-title">Interview Completion Status</div>
-          <table>
-             <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
-             <tbody>
-             ${Object.entries(metrics.interviewStatusDistribution)
-                 .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
-                 .map(([status, data]) => `
-                     <tr>
-                         <td>${status}</td>
-                         <td>${data.count}</td>
-                         <td>${data.percentage}%</td>
-                     </tr>
-                 `).join('')}
-             </tbody>
+           <table>
+              <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
+              <tbody>
+              ${Object.entries(metrics.interviewStatusDistribution)
+                  .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
+                  .map(([status, data]) => `
+                      <tr>
+                          <td>${status}</td>
+                          <td>${data.count}</td>
+                          <td>${data.percentage}%</td>
+                      </tr>
+                  `).join('')}
+              </tbody>
           </table>
           <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
       </div>
-
-      <!-- TODO: Add Breakdown Sections (e.g., By Job Function, By Country) -->
-      <!-- Example structure:
-      <div class="breakdown-section">
-          <h2>Breakdown by Job Function</h2>
-          <table>
-              <thead><tr><th>Job Function</th><th>Sent</th><th>Scheduled (%)</th><th>Completed (%)</th><th>Feedback (%)</th><th>Avg Duration</th></tr></thead>
-              <tbody>
-                  // Iterate through metrics.byJobFunction and calculate/display values
-              </tbody>
-          </table>
-      </div>
-      -->
 
       <div class="breakdown-section">
           <h2>Breakdown by Job Function</h2>
@@ -674,7 +661,7 @@ function sendVolkscienceEmail(recipient, ccRecipient, subject, htmlBody) {
   }
    if (!subject) {
      Logger.log("WARNING: Email subject is empty. Using default subject.");
-     subject = `${COMPANY_NAME} AI Interview Report`;
+     subject = `${VS_COMPANY_NAME} AI Interview Report`;
   }
    if (!htmlBody) {
      Logger.log("ERROR: Email body is empty. Cannot send email.");
@@ -703,7 +690,7 @@ function sendVolkscienceEmail(recipient, ccRecipient, subject, htmlBody) {
      // Optional: re-throw or handle error further
      // throw e;
      // Send error notification might be better here if main function doesn't catch
-     sendErrorNotification(`CRITICAL: Failed to send report email to ${recipient}`, `Error: ${e.toString()}`);
+     sendVsErrorNotification(`CRITICAL: Failed to send report email to ${recipient}`, `Error: ${e.toString()}`);
   }
 }
 
@@ -712,19 +699,19 @@ function sendVolkscienceEmail(recipient, ccRecipient, subject, htmlBody) {
  * @param {string} errorMessage The main error message.
  * @param {string} [stackTrace=''] Optional stack trace.
  */
-function sendErrorNotification(errorMessage, stackTrace = '') {
-   const recipient = EMAIL_RECIPIENT; // Send errors to the main recipient
+function sendVsErrorNotification(errorMessage, stackTrace = '') {
+   const recipient = VS_EMAIL_RECIPIENT; // Send errors to the main recipient
    if (!recipient) {
-       Logger.log("CRITICAL ERROR: Cannot send error notification because EMAIL_RECIPIENT is not set.");
+       Logger.log("CRITICAL ERROR: Cannot send error notification because VS_EMAIL_RECIPIENT is not set.");
        return;
    }
    try {
-       const subject = `ERROR: ${COMPANY_NAME} AI Report Failed - ${new Date().toLocaleString()}`;
-       let body = `Error generating/sending ${COMPANY_NAME} AI Interview report:\n\n${errorMessage}\n\n`;
+       const subject = `ERROR: ${VS_COMPANY_NAME} AI Report Failed - ${new Date().toLocaleString()}`;
+       let body = `Error generating/sending ${VS_COMPANY_NAME} AI Interview report:\n\n${errorMessage}\n\n`;
        if (stackTrace) {
            body += `Stack Trace:\n${stackTrace}\n\n`;
        }
-       body += `Log Sheet URL: ${LOG_SHEET_SPREADSHEET_URL}`;
+       body += `Log Sheet URL: ${VS_LOG_SHEET_SPREADSHEET_URL}`;
        MailApp.sendEmail(recipient, subject, body);
        Logger.log(`Error notification email sent to ${recipient}.`);
     } catch (emailError) {
@@ -737,17 +724,19 @@ function sendErrorNotification(errorMessage, stackTrace = '') {
 
 /**
  * Creates menu items in the Google Sheet UI (when script is opened from a Sheet).
+ * Note: Having multiple onOpen functions in one project can be problematic.
+ * Consider combining menu logic or using manual triggers.
  */
-function onOpen() {
+function setupVolkscienceMenu() {
   try {
     SpreadsheetApp.getUi()
-      .createMenu(`${COMPANY_NAME} AI Report`)
+      .createMenu(`${VS_COMPANY_NAME} AI Report`)
       .addItem('Generate & Send Report Now', 'generateAndSendVolkscienceReport')
       .addItem('Schedule Weekly Report', 'createVolkscienceTrigger')
       .addToUi();
   } catch (e) {
     // Log error but don't prevent sheet opening
-    Logger.log("Error creating menu (might happen if not opened from a Sheet): " + e);
+    Logger.log("Error creating Volkscience menu (might happen if not opened from a Sheet): " + e);
   }
 }
 
@@ -757,7 +746,7 @@ function onOpen() {
  * @param {any} dateInput Input value (string, number, Date object).
  * @returns {Date|null} Parsed Date object or null if invalid/empty.
  */
-function parseDateSafe(dateInput) {
+function vsParseDateSafe(dateInput) {
     if (dateInput === null || dateInput === undefined || dateInput === '') {
         return null;
     }
@@ -781,7 +770,7 @@ function parseDateSafe(dateInput) {
  * @param {Date|null} date2 Later date object.
  * @returns {number|null} Difference in days (float), or null if inputs invalid or difference is negative.
  */
-function calculateDaysDifference(date1, date2) {
+function vsCalculateDaysDifference(date1, date2) {
     if (!date1 || !date2) return null;
     const diffTime = date2.getTime() - date1.getTime();
     // Allow zero difference, ignore negative
