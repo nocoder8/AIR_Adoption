@@ -291,8 +291,8 @@ function filterDataByTimeRange(rows, colIndices) {
  */
 function calculateCompanyMetrics(filteredRows, colIndices) {
   const metrics = {
-    reportStartDate: (() => { const d = new Date(); d.setDate(d.getDate() - VS_REPORT_TIME_RANGE_DAYS); return d.toLocaleDateString(); })(),
-    reportEndDate: new Date().toLocaleDateString(),
+    reportStartDate: (() => { const d = new Date(); d.setDate(d.getDate() - VS_REPORT_TIME_RANGE_DAYS); return vsFormatDate(d); })(),
+    reportEndDate: vsFormatDate(new Date()),
     totalSent: filteredRows.length, // This now reflects rows after time and position filters
     totalScheduled: 0,
     totalCompleted: 0,
@@ -324,17 +324,16 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     dailySentCounts: {} // { "YYYY-MM-DD": count }
   };
 
-  // --- Status Definitions (Customize based on your data) ---
-  // Define statuses that indicate an interview was definitively scheduled
-  // const SCHEDULED_STATUSES = ['SCHEDULED']; // We will compare directly against "SCHEDULED" below
-  // Define statuses that indicate an interview was completed
-  const COMPLETED_STATUSES = ['completed', 'feedback provided', 'pending feedback', 'no show']; // Lowercase, include no-shows as technically completed appointment slot?
-  // Define the status indicating feedback was submitted (from Feedback_status column)
-  const FEEDBACK_SUBMITTED_STATUS = 'submitted'; // Lowercase
-  // Define statuses considered "Pending" (neither scheduled nor completed/terminal)
-  const PENDING_STATUSES = ['pending', 'invited', 'email sent']; // Lowercase - ADJUST AS NEEDED
-  // Define Feedback_status for Recruiter Submission Awaited
-  const RECRUITER_SUBMISSION_AWAITED_FEEDBACK = 'ai_recommended'; // Lowercase
+  // --- Status Definitions (Using RAW values from sheet) ---
+  // Define statuses for interviews included in Sent-to-Scheduled calculation
+  const STATUSES_FOR_SCHED_TIME_CALC = ['SCHEDULED', 'COMPLETED']; // Check Interview Status_Real directly
+  // Define statuses indicating completion (used for other metrics)
+  const COMPLETED_STATUSES = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show']; // Raw values? Check case sensitivity
+  // Define statuses considered "Pending"
+  const PENDING_STATUSES = ['PENDING', 'INVITED', 'EMAIL SENT']; // Raw values? Check case sensitivity
+  // Define Feedback_status values
+  const FEEDBACK_SUBMITTED_STATUS = 'Submitted'; // Raw value from Feedback_status
+  const RECRUITER_SUBMISSION_AWAITED_FEEDBACK = 'AI_RECOMMENDED'; // Raw value from Feedback_status
 
   // --- Column Indices (Check existence) ---
   const statusIdx = colIndices['STATUS_COLUMN'];
@@ -347,25 +346,20 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const countryIdx = colIndices.hasOwnProperty('Location_country') ? colIndices['Location_country'] : -1;
   const recruiterIdx = colIndices.hasOwnProperty('Recruiter_name') ? colIndices['Recruiter_name'] : -1;
 
-  const completedStatuses = COMPLETED_STATUSES; // Using defined constant
-  const feedbackSubmittedStatus = FEEDBACK_SUBMITTED_STATUS; // Using defined constant
-
   filteredRows.forEach(row => {
     // --- Get Sent Date for Timeseries ---
     const sentDate = vsParseDateSafe(row[sentAtIdx]);
     if (sentDate) {
-        const dateString = sentDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+        const dateString = vsFormatDate(sentDate); // Format as DD-MMM-YY
         metrics.dailySentCounts[dateString] = (metrics.dailySentCounts[dateString] || 0) + 1;
     }
 
     // --- Get Core Values ---
     const statusRaw = row[statusIdx] ? String(row[statusIdx]).trim() : 'Unknown';
-    const statusLower = statusRaw.toLowerCase();
     const jobFunc = (jobFuncIdx !== -1 && row[jobFuncIdx]) ? String(row[jobFuncIdx]).trim() : 'Unknown';
     const country = (countryIdx !== -1 && row[countryIdx]) ? String(row[countryIdx]).trim() : 'Unknown';
     const recruiterName = (recruiterIdx !== -1 && row[recruiterIdx]) ? String(row[recruiterIdx]).trim() : 'Unassigned';
     const feedbackStatusRaw = (feedbackStatusIdx !== -1 && row[feedbackStatusIdx]) ? String(row[feedbackStatusIdx]).trim() : '';
-    const feedbackStatusLower = feedbackStatusRaw.toLowerCase();
 
     // --- Initialize Breakdown Structures if they don't exist ---
     if (!metrics.byJobFunction[jobFunc]) {
@@ -390,35 +384,38 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     metrics.byRecruiter[recruiterName].statusCounts[statusRaw] = (metrics.byRecruiter[recruiterName].statusCounts[statusRaw] || 0) + 1;
 
     // --- Check if Scheduled ---
-    // Logic: Check if the raw status string is exactly "SCHEDULED".
-    let isScheduled = (statusRaw === 'SCHEDULED');
+    // Check if the interview status qualifies for the Sent-to-Scheduled time calculation
+    const qualifiesForSchedTimeCalc = STATUSES_FOR_SCHED_TIME_CALC.includes(statusRaw);
 
-    // Get scheduleDate for timeline calculation IF the interview is scheduled by status
+    // Parse scheduleDate if the column exists
     let scheduleDate = null;
-    // Parse date if the column exists, regardless of status, for potential timeline calc
-    // Note: isScheduled flag is determined *only* by the status string comparison above.
     if (scheduledAtIdx !== -1) {
          scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
     }
 
-    if (isScheduled) {
-       metrics.totalScheduled++;
+    // Calculate Sent to Scheduled Time only if status qualifies AND both dates are valid
+    if (qualifiesForSchedTimeCalc && sentDate && scheduleDate) {
+        const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate);
+        if (daysDiff !== null) { // Check handles negative difference
+          metrics.sentToScheduledDaysSum += daysDiff;
+          metrics.sentToScheduledCount++;
+          // TODO: Add breakdown timeline if needed
+        }
+    }
+
+    // --- Check if Scheduled (for breakdown counts) ---
+    // This uses the simpler definition for the table column
+    let isScheduledForCount = (statusRaw === 'SCHEDULED');
+
+    if (isScheduledForCount) {
+       metrics.totalScheduled++; // This count might become less meaningful now?
        metrics.byJobFunction[jobFunc].scheduled++;
        metrics.byCountry[country].scheduled++;
        metrics.byRecruiter[recruiterName].scheduled++;
-
-       // --- Calculate Sent to Scheduled Time ---
-       // Use the sentDate parsed earlier
-       const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate); // Use parsed scheduleDate and sentDate
-       if (daysDiff !== null) {
-         metrics.sentToScheduledDaysSum += daysDiff;
-         metrics.sentToScheduledCount++;
-         // TODO: Add breakdown timeline if needed
-       }
     }
 
     // --- Check if Pending ---
-    if (PENDING_STATUSES.includes(statusLower)) {
+    if (PENDING_STATUSES.includes(statusRaw)) { // Compare raw status
         metrics.byJobFunction[jobFunc].pending++;
         metrics.byCountry[country].pending++;
         metrics.byRecruiter[recruiterName].pending++;
@@ -426,7 +423,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     }
 
     // --- Check if Completed ---
-    let isCompleted = COMPLETED_STATUSES.includes(statusLower);
+    let isCompleted = COMPLETED_STATUSES.includes(statusRaw); // Compare raw status
     if (isCompleted) {
       metrics.totalCompleted++;
       metrics.byJobFunction[jobFunc].completed++;
@@ -443,7 +440,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        }
 
        // --- Check for Feedback Submitted (only if completed) ---
-       if (feedbackStatusIdx !== -1 && feedbackStatusLower === feedbackSubmittedStatus) { // Use lowercase compare
+       if (feedbackStatusIdx !== -1 && feedbackStatusRaw === FEEDBACK_SUBMITTED_STATUS) { // Compare raw status
          metrics.totalFeedbackSubmitted++;
          metrics.byJobFunction[jobFunc].feedbackSubmitted++; // Renamed for clarity
          metrics.byCountry[country].feedbackSubmitted++; // Track submitted feedback for country
@@ -464,7 +461,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        }
 
        // --- Check for Recruiter Submission Awaited (AI_RECOMMENDED in Feedback_status)
-       if (feedbackStatusIdx !== -1 && feedbackStatusLower === RECRUITER_SUBMISSION_AWAITED_FEEDBACK) {
+       if (feedbackStatusIdx !== -1 && feedbackStatusRaw === RECRUITER_SUBMISSION_AWAITED_FEEDBACK) { // Compare raw status
            metrics.byJobFunction[jobFunc].recruiterSubmissionAwaited++;
            metrics.byRecruiter[recruiterName].recruiterSubmissionAwaited++;
            // Note: No overall count added unless specifically needed
@@ -551,11 +548,21 @@ function createVolkscienceHtmlReport(metrics) {
 
   // --- Helper to generate timeseries table ---
   const generateTimeseriesTable = (dailyCounts) => {
-      const sortedDates = Object.keys(dailyCounts).sort();
+      const sortedDates = Object.keys(dailyCounts).sort((a, b) => {
+          // Sort DD-MMM-YY requires parsing back to dates
+          try {
+              const dateA = new Date(a.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
+              const dateB = new Date(b.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
+              return dateA - dateB;
+          } catch (e) {
+              return a.localeCompare(b); // Fallback to string sort if parsing fails
+          }
+      });
       if (sortedDates.length === 0) {
           return '<p class="note">No interview invitations sent in this period.</p>';
       }
-      let tableHtml = '<table style="margin-top: 10px;"><thead><tr><th>Date (YYYY-MM-DD)</th><th>Invitations Sent</th></tr></thead><tbody>';
+      // Use data-table for styling, but don't force center if it should fill width
+      let tableHtml = '<table class="data-table"><thead><tr><th>🗓️ Date (DD-MMM-YY)</th><th>✉️ Invitations Sent</th></tr></thead><tbody>';
       sortedDates.forEach(date => {
           tableHtml += `<tr><td>${date}</td><td>${dailyCounts[date]}</td></tr>`;
       });
@@ -569,32 +576,39 @@ function createVolkscienceHtmlReport(metrics) {
   <head>
     <title>${VS_COMPANY_NAME} AI Interview Report</title>
     <style>
-      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; }
-      .container { max-width: 800px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; background-color: #ffffff; }
+      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; margin: 0; }
+      .container { max-width: 850px; margin: 20px auto; padding: 25px; border: 1px solid #ccc; border-radius: 8px; background-color: #ffffff; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
       h1, h2, h3 { color: #333; }
-      h1 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; font-size: 24px;}
-      h2 { margin-top: 30px; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+      h1 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 25px; font-size: 26px; color: #1a237e; }
+      h2 { margin-top: 30px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; }
       .metric-block { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; }
       .metric { margin-bottom: 8px; font-size: 1.1em; }
       .metric-label { font-weight: bold; color: #555; display: inline-block; width: 250px; }
       .metric-value { font-weight: bold; color: #0056b3; }
-      .rate { color: #007bff; } /* Blue for rates */
+      .rate { color: #1976d2; } /* Adjusted Blue for rates */
       .time { color: #dc3545; } /* Red for time */
       .count { color: #28a745; } /* Green for counts */
-      .note { font-size: 0.9em; color: #666; margin-top: 15px; }
-      table { border-collapse: collapse; width: 100%; margin-top: 15px; }
-      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; }
-      th { background-color: #f2f2f2; font-weight: bold; }
-      .breakdown-section { margin-top: 20px; }
-      .kpi-box { background-color: #e6f4ea; border: 1px solid #c8e6c9; border-radius: 4px; padding: 20px; text-align: center; height: 150px; display: flex; flex-direction: column; justify-content: center; }
+      .percent-value { color: #0056b3; font-weight: normal; } /* Dark blue for percentages */
+      .note { font-size: 0.85em; color: #757575; margin-top: 15px; }
+      table.data-table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
+      table.centered-table { margin-left: auto; margin-right: auto; width: auto; max-width: 95%; }
+      th, td { border: 1px solid #e0e0e0; padding: 6px 10px; /* Reduced padding */ text-align: left; font-size: 12px; vertical-align: middle; }
+      th { background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; font-size: 11px; }
+      tr:nth-child(even) { background-color: #fafafa; } /* Alternating row color */
+      .breakdown-section { margin-top: 25px; }
+      .kpi-box { background-color: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px; padding: 20px; text-align: center; height: 150px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; }
       .kpi-label { font-size: 16px; color: #333; margin-bottom: 5px; }
-      .kpi-value { font-size: 48px; font-weight: bold; color: #2e7d32; }
-      .dashboard-table { width: 100%; border-collapse: collapse; border-spacing: 15px; margin-bottom: 20px; } /* Increased spacing */
-      .dashboard-cell { vertical-align: top; padding: 0 7.5px; } /* Add horizontal padding */
+      .kpi-value { font-size: 48px; font-weight: bold; color: #2e7d32; line-height: 1.1; }
+      .dashboard-table { width: 100%; border-collapse: separate; border-spacing: 20px 0; /* Increased horizontal spacing */ margin-bottom: 20px; }
+      .dashboard-cell { vertical-align: top; padding: 0; } /* Remove cell padding */
       .dashboard-cell-left { width: 30%; }
       .dashboard-cell-right { width: 70%; }
-      .section-container { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; }
-      .section-title { font-size: 18px; color: #333; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+      .section-container { background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; /* Removed bottom margin */ }
+      .section-title { font-size: 16px; color: #424242; margin-bottom: 15px; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; font-weight: bold; }
+      /* Bold first column in breakdown tables */
+      .breakdown-section table.data-table tr td:first-child {
+          font-weight: bold;
+      }
     </style>
   </head>
   <body>
@@ -610,7 +624,7 @@ function createVolkscienceHtmlReport(metrics) {
           <td class="dashboard-cell dashboard-cell-left">
             <!-- KPI Box -->
             <div class="kpi-box">
-              <div class="kpi-label">AI Invitations</div>
+              <div class="kpi-label">✉️ AI Invitations Sent</div>
               <div class="kpi-value">${metrics.totalSent}</div>
             </div>
           </td>
@@ -625,8 +639,8 @@ function createVolkscienceHtmlReport(metrics) {
       </table>
 
       <div class="metric-block">
-          <div class="section-title">Interview Completion Status</div>
-           <table>
+          <div class="section-title">📊 Interview Completion Status</div>
+           <table class="data-table centered-table">
               <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
               <tbody>
               ${Object.entries(metrics.interviewStatusDistribution)
@@ -635,7 +649,7 @@ function createVolkscienceHtmlReport(metrics) {
                       <tr>
                           <td>${status}</td>
                           <td>${data.count}</td>
-                          <td>${data.percentage}%</td>
+                          <td><span class="percent-value">${data.percentage}%</span></td>
                       </tr>
                   `).join('')}
               </tbody>
@@ -643,9 +657,15 @@ function createVolkscienceHtmlReport(metrics) {
           <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
       </div>
 
+      <h2>⏱️ Key Timelines & Metrics</h2>
+      <div class="metric-block">
+        <div class="metric"><span class="metric-label">Avg. Time Sent to Scheduled:</span> <span class="metric-value time">${metrics.avgSentToScheduledDays !== null ? metrics.avgSentToScheduledDays + ' days' : 'N/A'}</span></div>
+        <div class="metric"><span class="metric-label">Avg. Match Stars (Completed):</span> <span class="metric-value">${metrics.avgMatchStars !== null ? '⭐ ' + metrics.avgMatchStars : 'N/A'}</span></div>
+      </div>
+
       <div class="breakdown-section">
-          <h2>Breakdown by Recruiter</h2>
-          <table>
+          <h2>👥 Breakdown by Recruiter</h2>
+          <table class="data-table">
               <thead>
                  <tr>
                     <th>Recruiter</th>
@@ -664,9 +684,9 @@ function createVolkscienceHtmlReport(metrics) {
                           <tr>
                               <td>${rec}</td>
                               <td>${data.sent}</td>
-                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
                               <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
                               <td>${data.feedbackSubmitted}</td>
                               <td>${data.recruiterSubmissionAwaited}</td>
                           </tr>
@@ -676,8 +696,8 @@ function createVolkscienceHtmlReport(metrics) {
       </div>
 
       <div class="breakdown-section">
-          <h2>Breakdown by Job Function</h2>
-          <table>
+          <h2>⚙️ Breakdown by Job Function</h2>
+          <table class="data-table">
               <thead>
                  <tr>
                     <th>Job Function</th>
@@ -696,9 +716,9 @@ function createVolkscienceHtmlReport(metrics) {
                           <tr>
                               <td>${func}</td>
                               <td>${data.sent}</td>
-                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
                               <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
                               <td>${data.feedbackSubmitted}</td>
                               <td>${data.recruiterSubmissionAwaited}</td>
                           </tr>
@@ -708,8 +728,8 @@ function createVolkscienceHtmlReport(metrics) {
       </div>
 
       <div class="breakdown-section">
-          <h2>Breakdown by Location Country</h2>
-           <table>
+          <h2>🌍 Breakdown by Location Country</h2>
+           <table class="data-table">
               <thead>
                  <tr>
                     <th>Country</th>
@@ -727,77 +747,9 @@ function createVolkscienceHtmlReport(metrics) {
                           <tr>
                               <td>${ctry}</td>
                               <td>${data.sent}</td>
-                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
                               <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
-                              <td>${data.feedbackSubmitted}</td>
-                          </tr>
-                      `).join('')}
-              </tbody>
-          </table>
-      </div>
-
-      <h2>Key Timelines & Metrics</h2>
-      <div class="metric-block">
-        <div class="metric"><span class="metric-label">Avg. Time Sent to Scheduled:</span> <span class="metric-value time">${metrics.avgSentToScheduledDays !== null ? metrics.avgSentToScheduledDays + ' days' : 'N/A'}</span></div>
-        <div class="metric"><span class="metric-label">Avg. Match Stars (Completed):</span> <span class="metric-value">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</span></div>
-      </div>
-
-      <div class="breakdown-section">
-          <h2>Breakdown by Job Function</h2>
-          <table>
-              <thead>
-                 <tr>
-                    <th>Job Function</th>
-                    <th>Sent</th>
-                    <th>Completed (# / %)</th>
-                    <th>Scheduled</th>
-                    <th>Pending (# / %)</th>
-                    <th>Feedback Submitted</th>
-                    <th>Recruiter Submission Awaited</th>
-                  </tr>
-              </thead>
-              <tbody>
-                  ${Object.entries(metrics.byJobFunction)
-                      .sort(([funcA], [funcB]) => funcA.localeCompare(funcB)) // Sort alphabetically
-                      .map(([func, data]) => `
-                          <tr>
-                              <td>${func}</td>
-                              <td>${data.sent}</td>
-                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
-                              <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
-                              <td>${data.feedbackSubmitted}</td>
-                              <td>${data.recruiterSubmissionAwaited}</td>
-                          </tr>
-                      `).join('')}
-              </tbody>
-          </table>
-      </div>
-
-      <div class="breakdown-section">
-          <h2>Breakdown by Location Country</h2>
-           <table>
-              <thead>
-                 <tr>
-                    <th>Country</th>
-                    <th>Sent</th>
-                    <th>Completed (# / %)</th>
-                    <th>Scheduled</th>
-                    <th>Pending (# / %)</th>
-                    <th>Feedback Submitted</th>
-                  </tr>
-              </thead>
-              <tbody>
-                  ${Object.entries(metrics.byCountry)
-                      .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB)) // Sort alphabetically
-                      .map(([ctry, data]) => `
-                          <tr>
-                              <td>${ctry}</td>
-                              <td>${data.sent}</td>
-                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
-                              <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
                               <td>${data.feedbackSubmitted}</td>
                           </tr>
                       `).join('')}
@@ -942,4 +894,20 @@ function vsCalculateDaysDifference(date1, date2) {
     // Allow zero difference, ignore negative
     if (diffTime < 0) return null;
     return diffTime / (1000 * 60 * 60 * 24);
+}
+
+/**
+ * Formats a Date object into DD-MMM-YY string (e.g., 25-Jul-24).
+ * @param {Date|null} dateObject The date to format.
+ * @returns {string} Formatted date string or 'N/A' if input is invalid.
+ */
+function vsFormatDate(dateObject) {
+    if (!dateObject || !(dateObject instanceof Date) || isNaN(dateObject.getTime())) {
+        return 'N/A';
+    }
+    const day = String(dateObject.getDate()).padStart(2, '0');
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const month = monthNames[dateObject.getMonth()];
+    const year = String(dateObject.getFullYear()).slice(-2);
+    return `${day}-${month}-${year}`;
 } 
