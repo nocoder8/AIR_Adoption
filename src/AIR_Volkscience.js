@@ -312,8 +312,8 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     completedToFeedbackDaysSum: 0, // Needs completion and feedback timestamps
     completedToFeedbackCount: 0,
     // Durations
-    durationMinutesSum: 0,
-    durationCount: 0,
+    // durationMinutesSum: 0, // Removed
+    // durationCount: 0, // Removed
     // Match Stars (for completed)
     matchStarsSum: 0,
     matchStarsCount: 0,
@@ -322,8 +322,8 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     avgTimeToFeedbackByCountry: {}, // { "Country": { sumDays: 0, count: 0 } } // Placeholder, complex
     interviewStatusDistribution: {}, // { "Status": { count: X, percentage: Y } }
     // Raw data storage for breakdowns
-    byJobFunction: {}, // { "JobFunc": { sent: 0, scheduled: 0, completed: 0, feedback: 0, durationSum: 0, durationCount: 0, statusCounts: {} } }
-    byCountry: {},     // { "Country": { sent: 0, scheduled: 0, completed: 0, feedback: 0, statusCounts: {} } }
+    byJobFunction: {}, // { "JobFunc": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} } }
+    byCountry: {},     // { "Country": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} } }
     // Timeseries data
     dailySentCounts: {} // { "YYYY-MM-DD": count }
   };
@@ -335,6 +335,10 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const COMPLETED_STATUSES = ['completed', 'feedback provided', 'pending feedback', 'no show']; // Lowercase, include no-shows as technically completed appointment slot?
   // Define the status indicating feedback was submitted (from Feedback_status column)
   const FEEDBACK_SUBMITTED_STATUS = 'submitted'; // Lowercase
+  // Define statuses considered "Pending" (neither scheduled nor completed/terminal)
+  const PENDING_STATUSES = ['pending', 'invited', 'email sent']; // Lowercase - ADJUST AS NEEDED
+  // Define Feedback_status for Recruiter Submission Awaited
+  const RECRUITER_SUBMISSION_AWAITED_FEEDBACK = 'ai_recommended'; // Lowercase
 
   // --- Column Indices (Check existence) ---
   const statusIdx = colIndices['STATUS_COLUMN'];
@@ -367,10 +371,10 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
 
     // --- Initialize Breakdown Structures if they don't exist ---
     if (!metrics.byJobFunction[jobFunc]) {
-        metrics.byJobFunction[jobFunc] = { sent: 0, scheduled: 0, completed: 0, feedback: 0, durationSum: 0, durationCount: 0, statusCounts: {} };
+        metrics.byJobFunction[jobFunc] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} };
     }
     if (!metrics.byCountry[country]) {
-        metrics.byCountry[country] = { sent: 0, scheduled: 0, completed: 0, feedback: 0, statusCounts: {} };
+        metrics.byCountry[country] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} };
     }
 
     // --- Increment Base Counts ---
@@ -408,23 +412,19 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        }
     }
 
+    // --- Check if Pending ---
+    if (PENDING_STATUSES.includes(statusLower)) {
+        metrics.byJobFunction[jobFunc].pending++;
+        metrics.byCountry[country].pending++;
+        // Note: We don't increment an overall pending count here unless needed elsewhere
+    }
+
     // --- Check if Completed ---
     let isCompleted = COMPLETED_STATUSES.includes(statusLower);
     if (isCompleted) {
       metrics.totalCompleted++;
       metrics.byJobFunction[jobFunc].completed++;
       metrics.byCountry[country].completed++;
-
-      // --- Calculate Duration ---
-      if (durationIdx !== -1 && row[durationIdx] !== null && row[durationIdx] !== '') {
-          const duration = parseFloat(row[durationIdx]);
-          if (!isNaN(duration) && duration >= 0) {
-              metrics.durationMinutesSum += duration;
-              metrics.durationCount++;
-              metrics.byJobFunction[jobFunc].durationSum += duration;
-              metrics.byJobFunction[jobFunc].durationCount++;
-          }
-      }
 
       // --- Calculate Match Stars ---
        if (matchStarsIdx !== -1 && row[matchStarsIdx] !== null && row[matchStarsIdx] !== '') {
@@ -438,8 +438,8 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        // --- Check for Feedback Submitted (only if completed) ---
        if (feedbackStatusIdx !== -1 && feedbackStatusLower === feedbackSubmittedStatus) { // Use lowercase compare
          metrics.totalFeedbackSubmitted++;
-         metrics.byJobFunction[jobFunc].feedback++;
-         metrics.byCountry[country].feedback++;
+         metrics.byJobFunction[jobFunc].feedbackSubmitted++; // Renamed for clarity
+         metrics.byCountry[country].feedbackSubmitted++; // Track submitted feedback for country
 
          // --- Calculate Completed to Feedback Time ---
          // TODO: Needs reliable 'completed' and 'feedback submitted' timestamps.
@@ -453,6 +453,12 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
          //    metrics.completedToFeedbackCount++;
          //    // Add to breakdown by country?
          // }
+       }
+
+       // --- Check for Recruiter Submission Awaited (AI_RECOMMENDED in Feedback_status)
+       if (feedbackStatusIdx !== -1 && feedbackStatusLower === RECRUITER_SUBMISSION_AWAITED_FEEDBACK) {
+           metrics.byJobFunction[jobFunc].recruiterSubmissionAwaited++;
+           // Note: No overall count added unless specifically needed
        }
     }
   });
@@ -484,12 +490,9 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
    if (metrics.sentToScheduledCount > 0) {
        metrics.avgSentToScheduledDays = parseFloat((metrics.sentToScheduledDaysSum / metrics.sentToScheduledCount).toFixed(1));
    }
-    if (metrics.durationCount > 0) {
-        metrics.avgInterviewDuration = parseFloat((metrics.durationMinutesSum / metrics.durationCount).toFixed(1));
+    if (metrics.completedToFeedbackCount > 0) {
+        metrics.avgCompletedToFeedbackDays = parseFloat((metrics.completedToFeedbackDaysSum / metrics.completedToFeedbackCount).toFixed(1)); // Example
     }
-   // if (metrics.completedToFeedbackCount > 0) {
-   //     metrics.avgCompletedToFeedbackDays = parseFloat((vsCalculateDaysDifference(completedDate, feedbackDate) / metrics.completedToFeedbackCount).toFixed(1)); // Example
-   // }
 
 
   // --- Calculate Breakdown Metrics ---
@@ -497,17 +500,20 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   for (const func in metrics.byJobFunction) {
     const data = metrics.byJobFunction[func];
     data.scheduledRate = data.sent > 0 ? parseFloat(((data.scheduled / data.sent) * 100).toFixed(1)) : 0;
-    data.completedRate = data.scheduled > 0 ? parseFloat(((data.completed / data.scheduled) * 100).toFixed(1)) : 0;
-    data.feedbackRate = data.completed > 0 ? parseFloat(((data.feedback / data.completed) * 100).toFixed(1)) : 0;
-    data.avgDuration = data.durationCount > 0 ? parseFloat((data.durationSum / data.durationCount).toFixed(1)) : null;
+    data.completedNumber = data.completed; // Store raw number
+    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+    data.pendingNumber = data.pending; // Store raw number
+    data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
+    data.feedbackRate = data.completed > 0 ? parseFloat(((data.feedbackSubmitted / data.completed) * 100).toFixed(1)) : 0;
   }
 
   // Iterate through Countries
   for (const ctry in metrics.byCountry) {
     const data = metrics.byCountry[ctry];
-    data.scheduledRate = data.sent > 0 ? parseFloat(((data.scheduled / data.sent) * 100).toFixed(1)) : 0;
-    data.completedRate = data.scheduled > 0 ? parseFloat(((data.completed / data.scheduled) * 100).toFixed(1)) : 0;
-    data.feedbackRate = data.completed > 0 ? parseFloat(((data.feedback / data.completed) * 100).toFixed(1)) : 0;
+    data.completedNumber = data.completed;
+    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+    data.pendingNumber = data.pending;
+    data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
     // Add other country-specific metrics here if needed
   }
 
@@ -599,23 +605,6 @@ function createVolkscienceHtmlReport(metrics) {
         </tr>
       </table>
 
-      <h2>Overall Funnel Performance</h2>
-      <div class="metric-block">
-        <div class="metric"><span class="metric-label">Total Scheduled:</span> <span class="metric-value count">${metrics.totalScheduled}</span> (<span class="metric-value rate">${metrics.sentToScheduledRate}%</span> of Sent)</div>
-        <div class="metric"><span class="metric-label">Total Completed:</span> <span class="metric-value count">${metrics.totalCompleted}</span> (<span class="metric-value rate">${metrics.scheduledToCompletedRate}%</span> of Scheduled)</div>
-        <div class="metric"><span class="metric-label">Feedback Submitted:</span> <span class="metric-value count">${metrics.totalFeedbackSubmitted}</span> (<span class="metric-value rate">${metrics.completedToFeedbackRate}%</span> of Completed)</div>
-      </div>
-
-      <h2>Key Timelines & Metrics</h2>
-      <div class="metric-block">
-        <div class="metric"><span class="metric-label">Avg. Time Sent to Scheduled:</span> <span class="metric-value time">${metrics.avgSentToScheduledDays !== null ? metrics.avgSentToScheduledDays + ' days' : 'N/A'}</span></div>
-        <div class="metric"><span class="metric-label">Avg. Interview Duration:</span> <span class="metric-value time">${metrics.avgInterviewDuration !== null ? metrics.avgInterviewDuration + ' mins' : 'N/A'}</span></div>
-        <div class="metric"><span class="metric-label">Avg. Match Stars (Completed):</span> <span class="metric-value">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</span></div>
-        <!-- <div class="metric"><span class="metric-label">Avg. Time Completed to Feedback:</span> <span class="metric-value time">${metrics.avgCompletedToFeedbackDays !== null ? metrics.avgCompletedToFeedbackDays + ' days' : 'N/A'}</span></div> -->
-        <!-- Uncomment above line when completed-to-feedback time calculation is implemented -->
-      </div>
-
-      <h2>Interview Status Distribution</h2>
       <div class="metric-block">
           <div class="section-title">Interview Completion Status</div>
            <table>
@@ -635,6 +624,12 @@ function createVolkscienceHtmlReport(metrics) {
           <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
       </div>
 
+      <h2>Key Timelines & Metrics</h2>
+      <div class="metric-block">
+        <div class="metric"><span class="metric-label">Avg. Time Sent to Scheduled:</span> <span class="metric-value time">${metrics.avgSentToScheduledDays !== null ? metrics.avgSentToScheduledDays + ' days' : 'N/A'}</span></div>
+        <div class="metric"><span class="metric-label">Avg. Match Stars (Completed):</span> <span class="metric-value">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</span></div>
+      </div>
+
       <div class="breakdown-section">
           <h2>Breakdown by Job Function</h2>
           <table>
@@ -642,10 +637,11 @@ function createVolkscienceHtmlReport(metrics) {
                  <tr>
                     <th>Job Function</th>
                     <th>Sent</th>
-                    <th>Scheduled (%)</th>
-                    <th>Completed (% of Sched.)</th>
-                    <th>Feedback (% of Comp.)</th>
-                    <th>Avg. Duration (mins)</th>
+                    <th>Completed (# / %)</th>
+                    <th>Scheduled</th>
+                    <th>Pending (# / %)</th>
+                    <th>Feedback Submitted</th>
+                    <th>Recruiter Submission Awaited</th>
                   </tr>
               </thead>
               <tbody>
@@ -655,10 +651,11 @@ function createVolkscienceHtmlReport(metrics) {
                           <tr>
                               <td>${func}</td>
                               <td>${data.sent}</td>
-                              <td>${data.scheduledRate}%</td>
-                              <td>${data.completedRate}%</td>
-                              <td>${data.feedbackRate}%</td>
-                              <td>${data.avgDuration !== null ? data.avgDuration : 'N/A'}</td>
+                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.scheduled}</td>
+                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.feedbackSubmitted}</td>
+                              <td>${data.recruiterSubmissionAwaited}</td>
                           </tr>
                       `).join('')}
               </tbody>
@@ -672,9 +669,10 @@ function createVolkscienceHtmlReport(metrics) {
                  <tr>
                     <th>Country</th>
                     <th>Sent</th>
-                    <th>Scheduled (%)</th>
-                    <th>Completed (% of Sched.)</th>
-                    <th>Feedback (% of Comp.)</th>
+                    <th>Completed (# / %)</th>
+                    <th>Scheduled</th>
+                    <th>Pending (# / %)</th>
+                    <th>Feedback Submitted</th>
                   </tr>
               </thead>
               <tbody>
@@ -684,9 +682,10 @@ function createVolkscienceHtmlReport(metrics) {
                           <tr>
                               <td>${ctry}</td>
                               <td>${data.sent}</td>
-                              <td>${data.scheduledRate}%</td>
-                              <td>${data.completedRate}%</td>
-                              <td>${data.feedbackRate}%</td>
+                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.scheduled}</td>
+                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.feedbackSubmitted}</td>
                           </tr>
                       `).join('')}
               </tbody>
