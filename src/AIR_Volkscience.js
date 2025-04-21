@@ -80,8 +80,43 @@ function generateAndSendVolkscienceReport() {
          return;
     }
 
+    // 2c. Deduplicate by Profile_id and Position_id
+    const uniqueEntries = {}; // Using an object as a Set: key = "profileId_positionId"
+    const profileIdIndex = logData.colIndices['Profile_id']; // Already required
+    const positionIdIndex = logData.colIndices['Position_id']; // Added as required
+
+    const deduplicatedData = finalFilteredData.filter(row => {
+        // Ensure row has the necessary columns
+        if (row.length <= profileIdIndex || row.length <= positionIdIndex) {
+            Logger.log(`Skipping row during deduplication due to missing columns (Profile_id or Position_id). Row: ${JSON.stringify(row)}`);
+            return false; // Exclude rows missing essential IDs
+        }
+        const profileId = row[profileIdIndex];
+        const positionId = row[positionIdIndex];
+        const uniqueKey = `${profileId}_${positionId}`;
+
+        if (!profileId || !positionId) { // Check for blank IDs
+             Logger.log(`Skipping row during deduplication due to blank Profile_id or Position_id. Key: ${uniqueKey}. Row: ${JSON.stringify(row)}`);
+             return false;
+        }
+
+        if (!uniqueEntries[uniqueKey]) {
+            uniqueEntries[uniqueKey] = true; // Mark this combination as seen
+            return true; // Keep this row (first time seeing this combo)
+        }
+        return false; // Discard this row (duplicate combo)
+    });
+
+     Logger.log(`Deduplicated data based on Profile_id + Position_id. Count changed from ${finalFilteredData.length} to ${deduplicatedData.length}.`);
+
+    // Check if any data remains after deduplication
+    if (deduplicatedData.length === 0) {
+         Logger.log(`No data remaining after deduplication. Skipping report.`);
+         return;
+    }
+
     // 3. Calculate Metrics
-    const metrics = calculateCompanyMetrics(finalFilteredData, logData.colIndices);
+    const metrics = calculateCompanyMetrics(deduplicatedData, logData.colIndices);
     Logger.log('Successfully calculated company metrics.');
     // Logger.log(`Calculated Metrics: ${JSON.stringify(metrics)}`); // Optional: Log detailed metrics
 
@@ -161,12 +196,14 @@ function getLogSheetData() {
   // Adjust based on which metrics are finally implemented
   const requiredColumns = [
       'Interview_email_sent_at',
-      'Interview_status', // Crucial for funnel
       'Profile_id', // For uniqueness if needed
-      // Add others as needed for core metrics...
+      'Position_id', // Needed for unique candidate-position invites
+      // Status column - prioritize Interview Status_Real
   ];
   const optionalColumns = [
       'Position_name', // Needed for filtering
+      'Interview_status', // Fallback status column
+      'Interview Status_Real', // Preferred status column
       'Schedule_start_time', 'Duration_minutes', 'Feedback_status', 'Feedback_json',
       'Match_stars', 'Location_country', 'Job_function', 'Position_id',
       'Creator_user_id', 'Reviewer_email', 'Hiring_manager_name', 'Recruiter_name',
@@ -175,6 +212,23 @@ function getLogSheetData() {
 
   const colIndices = {};
   const missingCols = [];
+
+  // --- Find Status Column --- Priority: Interview Status_Real > Interview_status
+  let statusColName = null;
+  if (headers.includes('Interview Status_Real')) {
+      statusColName = 'Interview Status_Real';
+  } else if (headers.includes('Interview_status')) {
+      Logger.log("WARNING: 'Interview Status_Real' column not found. Falling back to 'Interview_status'.");
+      statusColName = 'Interview_status';
+  } else {
+      missingCols.push('Interview Status_Real (or Interview_status)');
+  }
+
+  if (statusColName) {
+      colIndices['STATUS_COLUMN'] = headers.indexOf(statusColName);
+      Logger.log(`Using column "${statusColName}" for interview status analysis.`);
+  } // Error handled later if statusColName is null
+  // --- End Find Status Column ---
 
   requiredColumns.forEach(colName => {
     const index = headers.indexOf(colName);
@@ -283,7 +337,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const FEEDBACK_SUBMITTED_STATUS = 'submitted'; // Lowercase
 
   // --- Column Indices (Check existence) ---
-  const statusIdx = colIndices['Interview_status'];
+  const statusIdx = colIndices['STATUS_COLUMN'];
   const sentAtIdx = colIndices['Interview_email_sent_at'];
   const scheduledAtIdx = colIndices.hasOwnProperty('Schedule_start_time') ? colIndices['Schedule_start_time'] : -1;
   const feedbackStatusIdx = colIndices.hasOwnProperty('Feedback_status') ? colIndices['Feedback_status'] : -1;
