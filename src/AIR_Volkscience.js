@@ -205,29 +205,24 @@ function getLogSheetData() {
       'Interview_status', // Fallback status column
       'Interview Status_Real', // Preferred status column
       'Schedule_start_time', 'Duration_minutes', 'Feedback_status', 'Feedback_json',
-      'Match_stars', 'Location_country', 'Job_function', 'Position_id',
-      'Creator_user_id', 'Reviewer_email', 'Hiring_manager_name', 'Recruiter_name',
+      'Match_stars', 'Location_country', 'Job_function', 'Position_id', 'Recruiter_name',
+      'Creator_user_id', 'Reviewer_email', 'Hiring_manager_name',
       'Days_pending_invitation', 'Interview Status_Real'
   ];
 
   const colIndices = {};
   const missingCols = [];
 
-  // --- Find Status Column --- Priority: Interview Status_Real > Interview_status
-  let statusColName = null;
-  if (headers.includes('Interview Status_Real')) {
-      statusColName = 'Interview Status_Real';
-  } else if (headers.includes('Interview_status')) {
-      Logger.log("WARNING: 'Interview Status_Real' column not found. Falling back to 'Interview_status'.");
-      statusColName = 'Interview_status';
+  // --- Find Status Column --- Enforce Interview Status_Real ---
+  const statusColName = 'Interview Status_Real';
+  const statusColIndex = headers.indexOf(statusColName);
+  if (statusColIndex !== -1) {
+      colIndices['STATUS_COLUMN'] = statusColIndex;
+      Logger.log(`Using column "${statusColName}" (index ${statusColIndex}) for interview status analysis.`);
   } else {
-      missingCols.push('Interview Status_Real (or Interview_status)');
-  }
-
-  if (statusColName) {
-      colIndices['STATUS_COLUMN'] = headers.indexOf(statusColName);
-      Logger.log(`Using column "${statusColName}" for interview status analysis.`);
-  } // Error handled later if statusColName is null
+      // Add the specific required column name to the missing list
+      missingCols.push(statusColName);
+  } // Error will be thrown later if missingCols is not empty
   // --- End Find Status Column ---
 
   requiredColumns.forEach(colName => {
@@ -324,13 +319,14 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     // Raw data storage for breakdowns
     byJobFunction: {}, // { "JobFunc": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} } }
     byCountry: {},     // { "Country": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} } }
+    byRecruiter: {},   // { "Recruiter": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} } }
     // Timeseries data
     dailySentCounts: {} // { "YYYY-MM-DD": count }
   };
 
   // --- Status Definitions (Customize based on your data) ---
   // Define statuses that indicate an interview was definitively scheduled
-  const SCHEDULED_STATUSES = ['scheduled', 'confirmed', 'rescheduled', 'completed', 'feedback provided', 'pending feedback', 'no show']; // Lowercase
+  // const SCHEDULED_STATUSES = ['SCHEDULED']; // We will compare directly against "SCHEDULED" below
   // Define statuses that indicate an interview was completed
   const COMPLETED_STATUSES = ['completed', 'feedback provided', 'pending feedback', 'no show']; // Lowercase, include no-shows as technically completed appointment slot?
   // Define the status indicating feedback was submitted (from Feedback_status column)
@@ -349,6 +345,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const matchStarsIdx = colIndices.hasOwnProperty('Match_stars') ? colIndices['Match_stars'] : -1;
   const jobFuncIdx = colIndices.hasOwnProperty('Job_function') ? colIndices['Job_function'] : -1;
   const countryIdx = colIndices.hasOwnProperty('Location_country') ? colIndices['Location_country'] : -1;
+  const recruiterIdx = colIndices.hasOwnProperty('Recruiter_name') ? colIndices['Recruiter_name'] : -1;
 
   const completedStatuses = COMPLETED_STATUSES; // Using defined constant
   const feedbackSubmittedStatus = FEEDBACK_SUBMITTED_STATUS; // Using defined constant
@@ -366,6 +363,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     const statusLower = statusRaw.toLowerCase();
     const jobFunc = (jobFuncIdx !== -1 && row[jobFuncIdx]) ? String(row[jobFuncIdx]).trim() : 'Unknown';
     const country = (countryIdx !== -1 && row[countryIdx]) ? String(row[countryIdx]).trim() : 'Unknown';
+    const recruiterName = (recruiterIdx !== -1 && row[recruiterIdx]) ? String(row[recruiterIdx]).trim() : 'Unassigned';
     const feedbackStatusRaw = (feedbackStatusIdx !== -1 && row[feedbackStatusIdx]) ? String(row[feedbackStatusIdx]).trim() : '';
     const feedbackStatusLower = feedbackStatusRaw.toLowerCase();
 
@@ -376,31 +374,38 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     if (!metrics.byCountry[country]) {
         metrics.byCountry[country] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} };
     }
+    if (!metrics.byRecruiter[recruiterName]) {
+        metrics.byRecruiter[recruiterName] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} };
+    }
 
     // --- Increment Base Counts ---
     // Every row in filteredRows represents a 'sent' interview
     metrics.byJobFunction[jobFunc].sent++;
     metrics.byCountry[country].sent++;
+    metrics.byRecruiter[recruiterName].sent++;
     // Store raw status counts before calculating percentages later
     metrics.interviewStatusDistribution[statusRaw] = (metrics.interviewStatusDistribution[statusRaw] || 0) + 1;
     metrics.byJobFunction[jobFunc].statusCounts[statusRaw] = (metrics.byJobFunction[jobFunc].statusCounts[statusRaw] || 0) + 1;
     metrics.byCountry[country].statusCounts[statusRaw] = (metrics.byCountry[country].statusCounts[statusRaw] || 0) + 1;
+    metrics.byRecruiter[recruiterName].statusCounts[statusRaw] = (metrics.byRecruiter[recruiterName].statusCounts[statusRaw] || 0) + 1;
 
     // --- Check if Scheduled ---
-    // Logic: Either the status indicates scheduled OR Schedule_start_time has a valid date.
-    let isScheduled = SCHEDULED_STATUSES.includes(statusLower);
+    // Logic: Check if the raw status string is exactly "SCHEDULED".
+    let isScheduled = (statusRaw === 'SCHEDULED');
+
+    // Get scheduleDate for timeline calculation IF the interview is scheduled by status
     let scheduleDate = null;
+    // Parse date if the column exists, regardless of status, for potential timeline calc
+    // Note: isScheduled flag is determined *only* by the status string comparison above.
     if (scheduledAtIdx !== -1) {
-        scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
-        if (scheduleDate) {
-            isScheduled = true; // If date exists, consider it scheduled regardless of status list (safer)
-        }
+         scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
     }
 
     if (isScheduled) {
        metrics.totalScheduled++;
        metrics.byJobFunction[jobFunc].scheduled++;
        metrics.byCountry[country].scheduled++;
+       metrics.byRecruiter[recruiterName].scheduled++;
 
        // --- Calculate Sent to Scheduled Time ---
        // Use the sentDate parsed earlier
@@ -416,6 +421,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     if (PENDING_STATUSES.includes(statusLower)) {
         metrics.byJobFunction[jobFunc].pending++;
         metrics.byCountry[country].pending++;
+        metrics.byRecruiter[recruiterName].pending++;
         // Note: We don't increment an overall pending count here unless needed elsewhere
     }
 
@@ -425,6 +431,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
       metrics.totalCompleted++;
       metrics.byJobFunction[jobFunc].completed++;
       metrics.byCountry[country].completed++;
+      metrics.byRecruiter[recruiterName].completed++;
 
       // --- Calculate Match Stars ---
        if (matchStarsIdx !== -1 && row[matchStarsIdx] !== null && row[matchStarsIdx] !== '') {
@@ -440,6 +447,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
          metrics.totalFeedbackSubmitted++;
          metrics.byJobFunction[jobFunc].feedbackSubmitted++; // Renamed for clarity
          metrics.byCountry[country].feedbackSubmitted++; // Track submitted feedback for country
+         metrics.byRecruiter[recruiterName].feedbackSubmitted++;
 
          // --- Calculate Completed to Feedback Time ---
          // TODO: Needs reliable 'completed' and 'feedback submitted' timestamps.
@@ -458,6 +466,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
        // --- Check for Recruiter Submission Awaited (AI_RECOMMENDED in Feedback_status)
        if (feedbackStatusIdx !== -1 && feedbackStatusLower === RECRUITER_SUBMISSION_AWAITED_FEEDBACK) {
            metrics.byJobFunction[jobFunc].recruiterSubmissionAwaited++;
+           metrics.byRecruiter[recruiterName].recruiterSubmissionAwaited++;
            // Note: No overall count added unless specifically needed
        }
     }
@@ -516,6 +525,16 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
     // Add other country-specific metrics here if needed
   }
+
+  // Iterate through Recruiters
+  for (const rec in metrics.byRecruiter) {
+     const data = metrics.byRecruiter[rec];
+     data.completedNumber = data.completed;
+     data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+     data.pendingNumber = data.pending;
+     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
+     // Scheduled, feedbackSubmitted, recruiterSubmissionAwaited counts are already stored
+   }
 
   Logger.log(`Metrics calculation complete. Total Sent: ${metrics.totalSent}, Scheduled: ${metrics.totalScheduled}, Completed: ${metrics.totalCompleted}`);
   return metrics;
@@ -622,6 +641,100 @@ function createVolkscienceHtmlReport(metrics) {
               </tbody>
           </table>
           <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
+      </div>
+
+      <div class="breakdown-section">
+          <h2>Breakdown by Recruiter</h2>
+          <table>
+              <thead>
+                 <tr>
+                    <th>Recruiter</th>
+                    <th>Sent</th>
+                    <th>Completed (# / %)</th>
+                    <th>Scheduled</th>
+                    <th>Pending (# / %)</th>
+                    <th>Feedback Submitted</th>
+                    <th>Recruiter Submission Awaited</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  ${Object.entries(metrics.byRecruiter)
+                      .sort(([recA], [recB]) => recA.localeCompare(recB)) // Sort alphabetically
+                      .map(([rec, data]) => `
+                          <tr>
+                              <td>${rec}</td>
+                              <td>${data.sent}</td>
+                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.scheduled}</td>
+                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.feedbackSubmitted}</td>
+                              <td>${data.recruiterSubmissionAwaited}</td>
+                          </tr>
+                      `).join('')}
+              </tbody>
+          </table>
+      </div>
+
+      <div class="breakdown-section">
+          <h2>Breakdown by Job Function</h2>
+          <table>
+              <thead>
+                 <tr>
+                    <th>Job Function</th>
+                    <th>Sent</th>
+                    <th>Completed (# / %)</th>
+                    <th>Scheduled</th>
+                    <th>Pending (# / %)</th>
+                    <th>Feedback Submitted</th>
+                    <th>Recruiter Submission Awaited</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  ${Object.entries(metrics.byJobFunction)
+                      .sort(([funcA], [funcB]) => funcA.localeCompare(funcB)) // Sort alphabetically
+                      .map(([func, data]) => `
+                          <tr>
+                              <td>${func}</td>
+                              <td>${data.sent}</td>
+                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.scheduled}</td>
+                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.feedbackSubmitted}</td>
+                              <td>${data.recruiterSubmissionAwaited}</td>
+                          </tr>
+                      `).join('')}
+              </tbody>
+          </table>
+      </div>
+
+      <div class="breakdown-section">
+          <h2>Breakdown by Location Country</h2>
+           <table>
+              <thead>
+                 <tr>
+                    <th>Country</th>
+                    <th>Sent</th>
+                    <th>Completed (# / %)</th>
+                    <th>Scheduled</th>
+                    <th>Pending (# / %)</th>
+                    <th>Feedback Submitted</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  ${Object.entries(metrics.byCountry)
+                      .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB)) // Sort alphabetically
+                      .map(([ctry, data]) => `
+                          <tr>
+                              <td>${ctry}</td>
+                              <td>${data.sent}</td>
+                              <td>${data.completedNumber} (${data.completedPercentOfSent}%)</td>
+                              <td>${data.scheduled}</td>
+                              <td>${data.pendingNumber} (${data.pendingPercentOfSent}%)</td>
+                              <td>${data.feedbackSubmitted}</td>
+                          </tr>
+                      `).join('')}
+              </tbody>
+          </table>
       </div>
 
       <h2>Key Timelines & Metrics</h2>
