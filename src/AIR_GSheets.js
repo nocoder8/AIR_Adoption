@@ -1284,3 +1284,52 @@ function getInterviewSentTimes() {
   Logger.log(`--- Finished getInterviewSentTimes ---`);
   return interviewSentMap;
 }
+
+/**
+ * Assigns a numerical rank to interview statuses for prioritization during deduplication.
+ * Lower rank means higher priority (e.g., Completed is better than Scheduled).
+ * Copied from AIR_Volkscience.js
+ * @param {string} status The raw interview status string.
+ * @returns {number} The rank of the status.
+ */
+function vsGetStatusRank(status) {
+    // Define statuses indicating completion (used for other metrics)
+    // IMPORTANT: These statuses should align with the values actually present in the Log_Enhanced sheet
+    const COMPLETED_STATUSES_RAW = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show'];
+    // Define statuses considered "Scheduled"
+    const SCHEDULED_STATUS_RAW = 'SCHEDULED';
+    // Define statuses considered "Pending"
+    const PENDING_STATUSES_RAW = ['PENDING', 'INVITED', 'EMAIL SENT'];
+
+    if (!status) return 99; // Handle null/undefined status
+    const trimmedStatus = status.trim();
+
+    if (COMPLETED_STATUSES_RAW.includes(trimmedStatus)) {
+        return 1; // Highest priority
+    } else if (trimmedStatus === SCHEDULED_STATUS_RAW) {
+        return 2;
+    } else if (PENDING_STATUSES_RAW.includes(trimmedStatus)) {
+        return 3;
+    } else {
+        return 99; // Lowest priority for anything else (Expired, Cancelled, Unknown etc.)
+    }
+}
+
+// Helper function to safely parse dates (assuming it might be needed, copying robust version)
+function parseDateSafe(dateInput) {
+    // Implement your robust date parsing logic here
+    // This function should return a Date object if parsing is successful
+    // If parsing fails, it should return null or an error message
+    // You can use JavaScript's Date constructor or a third-party library for robust parsing
+    // Example: return new Date(dateInput);
+    // If you want to use a third-party library, you can use something like date-fns
+    // Example: return parseISO(dateInput);
+    // If you want to use a custom parsing logic, you can implement it here
+    // Example: return customParseDate(dateInput);
+    // For this example, we'll use a simple check for valid date format
+    if (isNaN(Date.parse(dateInput))) {
+        return null;
+    } else {
+        return new Date(dateInput);
+    }
+}

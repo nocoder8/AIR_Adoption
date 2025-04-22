@@ -3,12 +3,12 @@
 // into the AI interview process funnel, timelines, and outcomes.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
-const VS_EMAIL_CC = ''; // Optional CC
+const VS_EMAIL_RECIPIENT = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_CC = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
 const VS_LOG_SHEET_NAME = 'Log_Enhanced'; // <<< VERIFY SHEET NAME
-const VS_REPORT_TIME_RANGE_DAYS = 90; // Default time range (days back) for the report
+const VS_REPORT_TIME_RANGE_DAYS = 99999; // Set large number to effectively include all time
 const VS_COMPANY_NAME = "Eightfold"; // Used in report titles etc.
 
 
@@ -80,34 +80,41 @@ function generateAndSendVolkscienceReport() {
          return;
     }
 
-    // 2c. Deduplicate by Profile_id and Position_id
-    const uniqueEntries = {}; // Using an object as a Set: key = "profileId_positionId"
-    const profileIdIndex = logData.colIndices['Profile_id']; // Already required
-    const positionIdIndex = logData.colIndices['Position_id']; // Added as required
+    // 2c. Deduplicate by Profile_id + Position_id, prioritizing by status rank
+    const profileIdIndex = logData.colIndices['Profile_id'];
+    const positionIdIndex = logData.colIndices['Position_id'];
+    const statusIndex = logData.colIndices['STATUS_COLUMN']; // Get the index determined earlier
+    const groupedData = {}; // Key: "profileId_positionId", Value: { bestRank: rank, row: rowData }
 
-    const deduplicatedData = finalFilteredData.filter(row => {
+    finalFilteredData.forEach(row => {
         // Ensure row has the necessary columns
-        if (row.length <= profileIdIndex || row.length <= positionIdIndex) {
-            Logger.log(`Skipping row during deduplication due to missing columns (Profile_id or Position_id). Row: ${JSON.stringify(row)}`);
-            return false; // Exclude rows missing essential IDs
+        if (row.length <= profileIdIndex || row.length <= positionIdIndex || row.length <= statusIndex) {
+            Logger.log(`Skipping row during grouping due to missing ID or Status columns. Row: ${JSON.stringify(row)}`);
+            return; // Skip this row
         }
         const profileId = row[profileIdIndex];
         const positionId = row[positionIdIndex];
-        const uniqueKey = `${profileId}_${positionId}`;
+        const status = row[statusIndex] ? String(row[statusIndex]).trim() : 'Unknown';
 
         if (!profileId || !positionId) { // Check for blank IDs
-             Logger.log(`Skipping row during deduplication due to blank Profile_id or Position_id. Key: ${uniqueKey}. Row: ${JSON.stringify(row)}`);
-             return false;
+            Logger.log(`Skipping row during grouping due to blank Profile_id or Position_id. Row: ${JSON.stringify(row)}`);
+            return; // Skip rows with blank IDs
         }
 
-        if (!uniqueEntries[uniqueKey]) {
-            uniqueEntries[uniqueKey] = true; // Mark this combination as seen
-            return true; // Keep this row (first time seeing this combo)
+        const uniqueKey = `${profileId}_${positionId}`;
+        const currentRank = vsGetStatusRank(status);
+
+        if (!groupedData[uniqueKey] || currentRank < groupedData[uniqueKey].bestRank) {
+            // If no entry exists OR current row has a better (lower) rank, store/replace it
+            groupedData[uniqueKey] = { bestRank: currentRank, row: row };
         }
-        return false; // Discard this row (duplicate combo)
+        // If an entry exists and current rank is not better, do nothing (keep the existing better row)
     });
 
-     Logger.log(`Deduplicated data based on Profile_id + Position_id. Count changed from ${finalFilteredData.length} to ${deduplicatedData.length}.`);
+    // Extract the best row for each unique key
+    const deduplicatedData = Object.values(groupedData).map(entry => entry.row);
+
+    Logger.log(`Deduplicated data based on Profile_id + Position_id (prioritizing status). Count changed from ${finalFilteredData.length} to ${deduplicatedData.length}.`);
 
     // Check if any data remains after deduplication
     if (deduplicatedData.length === 0) {
@@ -125,16 +132,17 @@ function generateAndSendVolkscienceReport() {
     Logger.log('Successfully generated HTML report content.');
 
     // 5. Send Email
-    const reportTitle = `${VS_COMPANY_NAME} AI Interview Report - Last ${VS_REPORT_TIME_RANGE_DAYS} Days (${new Date().toLocaleDateString()})`;
+    // Set static subject line as requested
+    const reportTitle = `AI Recruiter Adoption: Executive Summary (EF4EF)`;
     sendVolkscienceEmail(VS_EMAIL_RECIPIENT, VS_EMAIL_CC, reportTitle, htmlContent);
 
-    Logger.log(`--- ${VS_COMPANY_NAME} AI Interview Report generated and sent successfully! ---`);
+    Logger.log(`--- AI Recruiter Adoption: Executive Summary generated and sent successfully! ---`);
     return `Report sent to ${VS_EMAIL_RECIPIENT}`;
 
   } catch (error) {
     Logger.log(`Error in generateAndSendVolkscienceReport: ${error.toString()} Stack: ${error.stack}`);
     // Send error email
-    sendVsErrorNotification(`ERROR generating ${VS_COMPANY_NAME} AI Report: ${error.toString()}`, error.stack);
+    sendVsErrorNotification(`ERROR generating AI Recruiter Adoption: Executive Summary: ${error.toString()}`, error.stack);
     return `Error: ${error.toString()}`;
   }
 }
@@ -201,6 +209,7 @@ function getLogSheetData() {
       // Status column - prioritize Interview Status_Real
   ];
   const optionalColumns = [
+      'Candidate_name', // For debugging time calculation
       'Position_name', // Needed for filtering
       'Interview_status', // Fallback status column
       'Interview Status_Real', // Preferred status column
@@ -319,12 +328,13 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     // Raw data storage for breakdowns
     byJobFunction: {}, // { "JobFunc": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} } }
     byCountry: {},     // { "Country": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} } }
-    byRecruiter: {},   // { "Recruiter": { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} } }
     // Timeseries data
     dailySentCounts: {} // { "YYYY-MM-DD": count }
   };
 
   // --- Status Definitions (Using RAW values from sheet) ---
+  // Define statuses for interviews included in Sent-to-Scheduled calculation
+  const STATUSES_FOR_AVG_TIME_CALC = ['SCHEDULED', 'COMPLETED']; // Check Interview Status_Real directly
   // Define statuses indicating completion (used for other metrics)
   const COMPLETED_STATUSES = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show']; // Raw values? Check case sensitivity
   // Define statuses considered "Pending"
@@ -337,12 +347,12 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   const statusIdx = colIndices['STATUS_COLUMN'];
   const sentAtIdx = colIndices['Interview_email_sent_at'];
   const scheduledAtIdx = colIndices.hasOwnProperty('Schedule_start_time') ? colIndices['Schedule_start_time'] : -1;
+  const candidateNameIdx = colIndices.hasOwnProperty('Candidate_name') ? colIndices['Candidate_name'] : -1;
   const feedbackStatusIdx = colIndices.hasOwnProperty('Feedback_status') ? colIndices['Feedback_status'] : -1;
   const durationIdx = colIndices.hasOwnProperty('Duration_minutes') ? colIndices['Duration_minutes'] : -1;
   const matchStarsIdx = colIndices.hasOwnProperty('Match_stars') ? colIndices['Match_stars'] : -1;
   const jobFuncIdx = colIndices.hasOwnProperty('Job_function') ? colIndices['Job_function'] : -1;
   const countryIdx = colIndices.hasOwnProperty('Location_country') ? colIndices['Location_country'] : -1;
-  const recruiterIdx = colIndices.hasOwnProperty('Recruiter_name') ? colIndices['Recruiter_name'] : -1;
 
   filteredRows.forEach(row => {
     // --- Get Sent Date for Timeseries ---
@@ -356,7 +366,6 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     const statusRaw = row[statusIdx] ? String(row[statusIdx]).trim() : 'Unknown';
     const jobFunc = (jobFuncIdx !== -1 && row[jobFuncIdx]) ? String(row[jobFuncIdx]).trim() : 'Unknown';
     const country = (countryIdx !== -1 && row[countryIdx]) ? String(row[countryIdx]).trim() : 'Unknown';
-    const recruiterName = (recruiterIdx !== -1 && row[recruiterIdx]) ? String(row[recruiterIdx]).trim() : 'Unassigned';
     const feedbackStatusRaw = (feedbackStatusIdx !== -1 && row[feedbackStatusIdx]) ? String(row[feedbackStatusIdx]).trim() : '';
 
     // --- Initialize Breakdown Structures if they don't exist ---
@@ -366,51 +375,46 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     if (!metrics.byCountry[country]) {
         metrics.byCountry[country] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, statusCounts: {} };
     }
-    if (!metrics.byRecruiter[recruiterName]) {
-        metrics.byRecruiter[recruiterName] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} };
-    }
 
     // --- Increment Base Counts ---
     // Every row in filteredRows represents a 'sent' interview
     metrics.byJobFunction[jobFunc].sent++;
     metrics.byCountry[country].sent++;
-    metrics.byRecruiter[recruiterName].sent++;
     // Store raw status counts before calculating percentages later
     metrics.interviewStatusDistribution[statusRaw] = (metrics.interviewStatusDistribution[statusRaw] || 0) + 1;
     metrics.byJobFunction[jobFunc].statusCounts[statusRaw] = (metrics.byJobFunction[jobFunc].statusCounts[statusRaw] || 0) + 1;
     metrics.byCountry[country].statusCounts[statusRaw] = (metrics.byCountry[country].statusCounts[statusRaw] || 0) + 1;
-    metrics.byRecruiter[recruiterName].statusCounts[statusRaw] = (metrics.byRecruiter[recruiterName].statusCounts[statusRaw] || 0) + 1;
 
-    // --- Check if Scheduled ---
+    // --- Calculate Avg Time Sent to Completion (Scheduled) ---
+    // Check if status is SCHEDULED or COMPLETED
+    if (STATUSES_FOR_AVG_TIME_CALC.includes(statusRaw)) {
+        const candidateName = (candidateNameIdx !== -1 && row[candidateNameIdx]) ? row[candidateNameIdx] : 'Unknown Candidate';
+        // Ensure both dates are valid before calculating difference
+        const scheduleDateForAvg = (scheduledAtIdx !== -1) ? vsParseDateSafe(row[scheduledAtIdx]) : null;
+        if (sentDate && scheduleDateForAvg) {
+            const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDateForAvg);
+            if (daysDiff !== null) { // vsCalculateDaysDifference handles negative check
+                metrics.sentToScheduledDaysSum += daysDiff;
+                metrics.sentToScheduledCount++;
+                // <<< DETAILED LOGGING FOR DEBUGGING >>>
+                Logger.log(`DEBUG_AVG_TIME: Candidate=${candidateName}, Status=${statusRaw}, Sent=${sentDate.toISOString()}, Scheduled=${scheduleDateForAvg.toISOString()}, DiffDays=${daysDiff.toFixed(8)}`);
+            }
+        }
+    }
+
+    // --- Check if Scheduled (for breakdown counts) ---
     let isScheduledForCount = (statusRaw === 'SCHEDULED');
 
     if (isScheduledForCount) {
          metrics.totalScheduled++; // This count might become less meaningful now?
          metrics.byJobFunction[jobFunc].scheduled++;
          metrics.byCountry[country].scheduled++;
-         metrics.byRecruiter[recruiterName].scheduled++;
-
-        // --- Calculate Sent to Scheduled Time ---
-        // Parse schedule date *only* if needed here and status is SCHEDULED
-        let scheduleDate = null;
-        if (scheduledAtIdx !== -1) {
-             scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
-        }
-        // Now calculate difference if both dates are valid
-        if (sentDate && scheduleDate) {
-             const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate);
-             if (daysDiff !== null) { // Check handles negative difference
-               metrics.sentToScheduledDaysSum += daysDiff;
-               metrics.sentToScheduledCount++;
-             }
-        }
     }
 
     // --- Check if Pending ---
     if (PENDING_STATUSES.includes(statusRaw)) { // Compare raw status
         metrics.byJobFunction[jobFunc].pending++;
         metrics.byCountry[country].pending++;
-        metrics.byRecruiter[recruiterName].pending++;
         // Note: We don't increment an overall pending count here unless needed elsewhere
     }
 
@@ -420,7 +424,6 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
       metrics.totalCompleted++;
       metrics.byJobFunction[jobFunc].completed++;
       metrics.byCountry[country].completed++;
-      metrics.byRecruiter[recruiterName].completed++;
 
       // --- Calculate Match Stars ---
        if (matchStarsIdx !== -1 && row[matchStarsIdx] !== null && row[matchStarsIdx] !== '') {
@@ -436,26 +439,11 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
          metrics.totalFeedbackSubmitted++;
          metrics.byJobFunction[jobFunc].feedbackSubmitted++; // Renamed for clarity
          metrics.byCountry[country].feedbackSubmitted++; // Track submitted feedback for country
-         metrics.byRecruiter[recruiterName].feedbackSubmitted++;
-
-         // --- Calculate Completed to Feedback Time ---
-         // TODO: Needs reliable 'completed' and 'feedback submitted' timestamps.
-         // This is complex and might require parsing Feedback_json or another column.
-         // Placeholder:
-         // const completedDate = ... ; // Infer completion date
-         // const feedbackDate = ... ; // Infer feedback submission date
-         // const feedbackDaysDiff = vsCalculateDaysDifference(completedDate, feedbackDate);
-         // if (feedbackDaysDiff !== null) {
-         //    metrics.completedToFeedbackDaysSum += feedbackDaysDiff;
-         //    metrics.completedToFeedbackCount++;
-         //    // Add to breakdown by country?
-         // }
        }
 
        // --- Check for Recruiter Submission Awaited (AI_RECOMMENDED in Feedback_status)
        if (feedbackStatusIdx !== -1 && feedbackStatusRaw === RECRUITER_SUBMISSION_AWAITED_FEEDBACK) { // Compare raw status
            metrics.byJobFunction[jobFunc].recruiterSubmissionAwaited++;
-           metrics.byRecruiter[recruiterName].recruiterSubmissionAwaited++;
            // Note: No overall count added unless specifically needed
        }
     }
@@ -517,16 +505,6 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     // Add other country-specific metrics here if needed
   }
 
-  // Iterate through Recruiters
-  for (const rec in metrics.byRecruiter) {
-     const data = metrics.byRecruiter[rec];
-     data.completedNumber = data.completed;
-     data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
-     data.pendingNumber = data.pending;
-     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
-     // Scheduled, feedbackSubmitted, recruiterSubmissionAwaited counts are already stored
-   }
-
   Logger.log(`Metrics calculation complete. Total Sent: ${metrics.totalSent}, Scheduled: ${metrics.totalScheduled}, Completed: ${metrics.totalCompleted}`);
   return metrics;
 }
@@ -577,202 +555,182 @@ function createVolkscienceHtmlReport(metrics) {
       h2 { margin-top: 30px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; }
       .metric-block { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; }
       .rate { color: #1976d2; } /* Adjusted Blue for rates */
-      .time { color: #dc3545; } /* Red for time */
-      .count { color: #28a745; } /* Green for counts */
+      .time { color: #ef6c00; } /* Updated Orange for time KPI */
+      .count { color: #424242; } /* Darker gray for counts */
       .percent-value { color: #0056b3; font-weight: normal; } /* Dark blue for percentages */
       .note { font-size: 0.85em; color: #757575; margin-top: 15px; }
       table.data-table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
-      table.centered-table { margin-left: auto; margin-right: auto; width: auto; max-width: 95%; }
+      table.centered-table { margin-left: auto; margin-right: auto; width: auto; max-width: 98%; }
       th, td { border: 1px solid #e0e0e0; padding: 6px 10px; /* Reduced padding */ text-align: left; font-size: 12px; vertical-align: middle; }
       th { background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; font-size: 11px; }
       tr:nth-child(even) { background-color: #fafafa; } /* Alternating row color */
       .breakdown-section { margin-top: 25px; }
-      .kpi-box { background-color: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px; padding: 20px; text-align: center; height: 150px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; }
-      .kpi-label { font-size: 14px; color: #555; margin-bottom: 8px; line-height: 1.3; }
-      .kpi-value { font-size: 36px; font-weight: bold; color: #2e7d32; line-height: 1.1; }
-      .kpi-value .unit { font-size: 18px; font-weight: normal; margin-left: 2px; }
-      .kpi-box.completion { background-color: #e3f2fd; border-color: #bbdefb; } /* Blue for completion */
-      .kpi-box.completion .kpi-value { color: #1976d2; }
-      .kpi-box.time { background-color: #fff3e0; border-color: #ffe0b2; } /* Orange for time */
-      .kpi-box.time .kpi-value { color: #ef6c00; }
-      .kpi-box.stars { background-color: #f3e5f5; border-color: #e1bee7; } /* Purple for stars */
-      .kpi-box.stars .kpi-value { color: #8e24aa; }
-      .top-kpi-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; margin-bottom: 25px; }
-      .top-kpi-cell { width: 25%; vertical-align: top; padding: 0; }
+      /* KPI Box Styling - Using Nested Tables */
+      .kpi-nested-table { width: 100%; height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; /* Clip content if needed */ }
+      .kpi-nested-table td { border: none; /* Remove internal cell borders */ vertical-align: middle; text-align: center; }
+      .kpi-header-cell { /* background-color: #f5f5f5; */ padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; /* Divider line */ height: 30px; /* Fixed header height */ }
+      .kpi-value-cell { padding: 10px; font-size: 34px; font-weight: bold; height: 100%; /* Fill remaining height */ }
+      .kpi-value-cell .unit { font-size: 16px; font-weight: normal; margin-left: 3px; }
+
+      /* Specific KPI Backgrounds/Value Colors */
+      .kpi-value-cell.invitations { background-color: #e8f5e9; color: #2e7d32; }
+      .kpi-nested-table.invitations .kpi-header-cell { background-color: #e8f5e9; }
+
+      .kpi-value-cell.completion { background-color: #e3f2fd; color: #1976d2; }
+      .kpi-nested-table.completion .kpi-header-cell { background-color: #e3f2fd; }
+
+      .kpi-value-cell.time { background-color: #fff3e0; color: #ef6c00; }
+      .kpi-nested-table.time .kpi-header-cell { background-color: #fff3e0; }
+
+      .kpi-value-cell.stars { background-color: #f3e5f5; color: #8e24aa; }
+      .kpi-nested-table.stars .kpi-header-cell { background-color: #f3e5f5; }
+
+      .top-kpi-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; /* Adjusted spacing */ margin-bottom: 25px; table-layout: fixed; }
+      .top-kpi-cell { width: 25%; /* Four columns */ vertical-align: top; padding: 0; }
       .section-container { background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; /* Removed bottom margin */ }
-      .section-title { font-size: 16px; color: #424242; margin-bottom: 15px; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; font-weight: bold; }
       /* Bold first column in breakdown tables */
       .breakdown-section table.data-table tr td:first-child {
           font-weight: bold;
+          text-align: left; /* Keep first column left-aligned */
+      }
+      /* Center align other breakdown table cells */
+      .breakdown-section table.data-table tr td:not(:first-child) {
+          text-align: center;
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>${VS_COMPANY_NAME} AI Interview Report</h1>
-      <p style="text-align: center; margin-top: -15px; margin-bottom: 25px; color: #555;">
-        Data from ${metrics.reportStartDate} to ${metrics.reportEndDate} (Based on Interview Sent Date)
-      </p>
+      <h1>AI Recruiter Adoption: Executive Summary</h1>
 
-      <!-- Top 4 KPI Boxes -->
+      <!-- Top KPI Boxes - 1x4 Layout -->
       <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="top-kpi-table">
         <tr>
           <td class="top-kpi-cell">
-            <div class="kpi-box invitations">
-              <div class="kpi-label">✉️ AI Invitations Sent</div>
-              <div class="kpi-value">${metrics.totalSent}</div>
-            </div>
+            <table class="kpi-nested-table invitations">
+              <tr><td class="kpi-header-cell">✉️ AI Invitations Sent</td></tr>
+              <tr><td class="kpi-value-cell invitations">${metrics.totalSent}</td></tr>
+            </table>
           </td>
           <td class="top-kpi-cell">
-            <div class="kpi-box completion">
-              <div class="kpi-label">✅ Completion Rate</div>
-              <div class="kpi-value">${metrics.completionRate}<span class="unit">%</span></div>
-            </div>
+            <table class="kpi-nested-table completion">
+              <tr><td class="kpi-header-cell">✅ Completion Rate</td></tr>
+              <tr><td class="kpi-value-cell completion">${metrics.completionRate}<span class="unit">%</span></td></tr>
+            </table>
           </td>
           <td class="top-kpi-cell">
-            <div class="kpi-box time">
-              <div class="kpi-label">⏱️ Avg Time Sent to Completion*</div>
-              <div class="kpi-value">${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span class="unit">days</span></div>
-            </div>
+            <table class="kpi-nested-table time">
+              <tr><td class="kpi-header-cell">⏱️ Avg Time Sent to Completion*</td></tr>
+              <tr><td class="kpi-value-cell time">${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span class="unit">days</span></td></tr>
+            </table>
           </td>
           <td class="top-kpi-cell">
-            <div class="kpi-box stars">
-              <div class="kpi-label">⭐ Avg Match Stars (Completed)</div>
-              <div class="kpi-value">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</div>
-            </div>
+            <table class="kpi-nested-table stars">
+              <tr><td class="kpi-header-cell">⭐ Avg Match Stars (Completed)</td></tr>
+              <tr><td class="kpi-value-cell stars">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</td></tr>
+            </table>
           </td>
         </tr>
       </table>
 
       <!-- Interview Completion Status -->
       <div class="metric-block">
-          <div class="section-title">📊 Interview Completion Status</div>
-           <table class="data-table centered-table">
-              <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
-              <tbody>
-              ${Object.entries(metrics.interviewStatusDistribution)
-                  .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
-                  .map(([status, data]) => `
-                      <tr>
-                          <td>${status}</td>
-                          <td>${data.count}</td>
-                          <td><span class="percent-value">${data.percentage}%</span></td>
-                      </tr>
-                  `).join('')}
-              </tbody>
-          </table>
-          <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
-      </div>
+          <div class="section-title">📊 AI Screening Completion Status</div>
+          <table class="data-table centered-table">
+             <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
+             <tbody>
+             ${Object.entries(metrics.interviewStatusDistribution)
+                 .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
+                 .map(([status, data]) => `
+                     <tr>
+                         <td>${status}</td>
+                         <td>${data.count}</td>
+                         <td><span class="percent-value">${data.percentage}%</span></td>
+                     </tr>
+                 `).join('')}
+             </tbody>
+         </table>
+         <p class="note">Percentage is based on the total number of invitations sent since 17th April 2025 (Launch of AIR).</p>
+     </div>
 
-      <!-- Daily Invitations Sent -->
-      <div class="section-container">
-         <div class="section-title">🗓️ Daily Invitations Sent</div>
-         ${generateTimeseriesTable(metrics.dailySentCounts)}
-      </div>
+     <!-- Daily Invitations Sent -->
+     <div class="section-container">
+        <div class="section-title">🗓️ Daily Invitations Sent</div>
+        <!-- Apply centered-table class to the table generated by the helper -->
+        ${generateTimeseriesTable(metrics.dailySentCounts).replace('<table class="data-table">', '<table class="data-table centered-table">')}
+     </div>
 
-      <div class="breakdown-section">
-          <h2>👥 Breakdown by Recruiter</h2>
-          <table class="data-table">
-              <thead>
-                 <tr>
-                    <th>Recruiter</th>
-                    <th>Sent</th>
-                    <th>Completed (# / %)</th>
-                    <th>Scheduled</th>
-                    <th>Pending (# / %)</th>
-                    <th>Feedback Submitted</th>
-                    <th>Recruiter Submission Awaited</th>
-                  </tr>
-              </thead>
-              <tbody>
-                  ${Object.entries(metrics.byRecruiter)
-                      .sort(([recA], [recB]) => recA.localeCompare(recB)) // Sort alphabetically
-                      .map(([rec, data]) => `
-                          <tr>
-                              <td>${rec}</td>
-                              <td>${data.sent}</td>
-                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                              <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                              <td>${data.feedbackSubmitted}</td>
-                              <td>${data.recruiterSubmissionAwaited}</td>
-                          </tr>
-                      `).join('')}
-              </tbody>
-          </table>
-      </div>
+     <div class="breakdown-section">
+         <h2>💼 Breakdown by Job Function</h2>
+         <table class="data-table centered-table">
+             <thead>
+                <tr>
+                   <th>Job Function</th>
+                   <th>Sent</th>
+                   <th>Completed (# / %)</th>
+                   <th>Scheduled</th>
+                   <th>Pending (# / %)</th>
+                   <th>Feedback Submitted</th>
+                   <th>Recruiter Submission Awaited</th>
+                 </tr>
+             </thead>
+             <tbody>
+                 ${Object.entries(metrics.byJobFunction)
+                     .sort(([funcA], [funcB]) => funcA.localeCompare(funcB)) // Sort alphabetically
+                     .map(([func, data]) => `
+                         <tr>
+                             <td>${func}</td>
+                             <td>${data.sent}</td>
+                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
+                             <td>${data.scheduled}</td>
+                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
+                             <td>${data.feedbackSubmitted}</td>
+                             <td>${data.recruiterSubmissionAwaited}</td>
+                         </tr>
+                     `).join('')}
+             </tbody>
+         </table>
+     </div>
 
-      <div class="breakdown-section">
-          <h2>⚙️ Breakdown by Job Function</h2>
-          <table class="data-table">
-              <thead>
-                 <tr>
-                    <th>Job Function</th>
-                    <th>Sent</th>
-                    <th>Completed (# / %)</th>
-                    <th>Scheduled</th>
-                    <th>Pending (# / %)</th>
-                    <th>Feedback Submitted</th>
-                    <th>Recruiter Submission Awaited</th>
-                  </tr>
-              </thead>
-              <tbody>
-                  ${Object.entries(metrics.byJobFunction)
-                      .sort(([funcA], [funcB]) => funcA.localeCompare(funcB)) // Sort alphabetically
-                      .map(([func, data]) => `
-                          <tr>
-                              <td>${func}</td>
-                              <td>${data.sent}</td>
-                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                              <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                              <td>${data.feedbackSubmitted}</td>
-                              <td>${data.recruiterSubmissionAwaited}</td>
-                          </tr>
-                      `).join('')}
-              </tbody>
-          </table>
-      </div>
+     <div class="breakdown-section">
+         <h2>🌍 Breakdown by Location Country</h2>
+          <table class="data-table centered-table">
+             <thead>
+                <tr>
+                   <th>Country</th>
+                   <th>Sent</th>
+                   <th>Completed (# / %)</th>
+                   <th>Scheduled</th>
+                   <th>Pending (# / %)</th>
+                   <th>Feedback Submitted</th>
+                 </tr>
+             </thead>
+             <tbody>
+                 ${Object.entries(metrics.byCountry)
+                     .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB)) // Sort alphabetically
+                     .map(([ctry, data]) => `
+                         <tr>
+                             <td>${ctry}</td>
+                             <td>${data.sent}</td>
+                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
+                             <td>${data.scheduled}</td>
+                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
+                             <td>${data.feedbackSubmitted}</td>
+                         </tr>
+                     `).join('')}
+             </tbody>
+         </table>
+     </div>
 
-      <div class="breakdown-section">
-          <h2>🌍 Breakdown by Location Country</h2>
-           <table class="data-table">
-              <thead>
-                 <tr>
-                    <th>Country</th>
-                    <th>Sent</th>
-                    <th>Completed (# / %)</th>
-                    <th>Scheduled</th>
-                    <th>Pending (# / %)</th>
-                    <th>Feedback Submitted</th>
-                  </tr>
-              </thead>
-              <tbody>
-                  ${Object.entries(metrics.byCountry)
-                      .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB)) // Sort alphabetically
-                      .map(([ctry, data]) => `
-                          <tr>
-                              <td>${ctry}</td>
-                              <td>${data.sent}</td>
-                              <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                              <td>${data.scheduled}</td>
-                              <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                              <td>${data.feedbackSubmitted}</td>
-                          </tr>
-                      `).join('')}
-              </tbody>
-          </table>
-      </div>
-
-      <p class="note" style="text-align: center; margin-top: 30px;">
-        *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
-        Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
-      </p>
-    </div>
-  </body>
-  </html>
-  `;
-  return html;
+     <p class="note" style="text-align: center; margin-top: 30px;">
+       *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
+       Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
+     </p>
+   </div>
+ </body>
+ </html>
+ `;
+ return html;
 }
 
 /**
@@ -920,4 +878,29 @@ function vsFormatDate(dateObject) {
     const month = monthNames[dateObject.getMonth()];
     const year = String(dateObject.getFullYear()).slice(-2);
     return `${day}-${month}-${year}`;
+}
+
+/**
+ * Assigns a numerical rank to interview statuses for prioritization during deduplication.
+ * Lower rank means higher priority (e.g., Completed is better than Scheduled).
+ * @param {string} status The raw interview status string.
+ * @returns {number} The rank of the status.
+ */
+function vsGetStatusRank(status) {
+    // Define statuses indicating completion (used for other metrics)
+    const COMPLETED_STATUSES_RAW = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show']; // Keep raw values consistent with calculateCompanyMetrics
+    // Define statuses considered "Scheduled"
+    const SCHEDULED_STATUS_RAW = 'SCHEDULED'; // Keep raw value consistent
+    // Define statuses considered "Pending"
+    const PENDING_STATUSES_RAW = ['PENDING', 'INVITED', 'EMAIL SENT']; // Keep raw values consistent
+
+    if (COMPLETED_STATUSES_RAW.includes(status)) {
+        return 1; // Highest priority
+    } else if (status === SCHEDULED_STATUS_RAW) {
+        return 2;
+    } else if (PENDING_STATUSES_RAW.includes(status)) {
+        return 3;
+    } else {
+        return 99; // Lowest priority for anything else (Expired, Cancelled, Unknown etc.)
+    }
 } 
