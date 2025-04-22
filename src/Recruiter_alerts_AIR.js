@@ -135,9 +135,15 @@ function sendRecruiterAlerts() {
             newHighMatchCount = countNewHighMatchCandidates(recruiterEmail, appRows, appData.colIndices);
         }
 
+        // Calculate count of PENDING candidates needing nudge for this recruiter
+        let pendingNudgeCount = 0;
+        // Use deduplicatedData here as it contains the necessary status and email sent date
+        // and we only want to count each unique pending profile+position once.
+        pendingNudgeCount = countPendingCandidatesToNudge(recruiterEmail, deduplicatedData, logData.colIndices);
+
         try {
-          // Pass the new count to the HTML function
-          const htmlBody = createAlertEmailHtml(recruiterEmail, candidatesForRecruiter, logData.colIndices, newHighMatchCount);
+          // Pass the new counts to the HTML function
+          const htmlBody = createAlertEmailHtml(recruiterEmail, candidatesForRecruiter, logData.colIndices, newHighMatchCount, pendingNudgeCount);
           const subject = "Urgent: Review AI Screening Feedback";
           // --- TESTING: Send to pkumar instead of actual recruiter ---
           const testRecipient = 'pkumar@eightfold.ai'; // <-- STILL SET FOR TESTING
@@ -243,7 +249,8 @@ function getLogDataForAlerts() {
       'Candidate_name',
       'Profile_link', // Corrected case based on user confirmation
       'Current_company', // Added via SQL
-      'Position_name'
+      'Position_name',
+      'Interview_email_sent_at' // <<< Added for nudge calculation
   ];
   const optionalColumns = [
       'Interview Status_Real' // Check if this exists from potentially different sources
@@ -436,9 +443,10 @@ function groupCandidatesByRecruiter(candidatesToAlert, colIndices) {
  * @param {Array<Array>} candidates The array of candidate rows for this recruiter.
  * @param {object} colIndices Map of column names to indices.
  * @param {number} newHighMatchCount The count of NEW, >=4* candidates.
+ * @param {number} pendingNudgeCount The count of PENDING candidates needing nudge.
  * @returns {string} The HTML content for the email body.
  */
-function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMatchCount) {
+function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMatchCount, pendingNudgeCount) {
   // Sort candidates by Time_since_interview_completion_days descending
   const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
   candidates.sort((a, b) => {
@@ -521,11 +529,20 @@ function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMat
         <li>If negative: Reject and send the standard rejection email from T2.</li>
       </ul>
 
-      ${newHighMatchCount > 0 ? `<p style="font-size: 14px; background-color: #e9f5ff; border: 1px solid #b3daff; padding: 10px 15px; border-radius: 4px;"><b>Additionally:</b> You have <b>${newHighMatchCount}</b> candidate(s) in the 'NEW' stage with a Match Score of 4+ applied since ${ALERT_LAUNCH_DATE.toLocaleDateString()} who are awaiting review.</p>` : ''}
+      <!-- Start Action Items Box -->
+      <div style="border: 1px solid #e0e0e0; padding: 15px 20px; margin-top: 20px; background-color: #f9f9f9; border-radius: 5px;">
 
-      <p class="footer">
-        <a href="${ALERT_LOOKER_STUDIO_URL}" target="_blank" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 13px; border-bottom: 2px solid #0056b3; transition: background-color 0.2s ease;">Review all your AIR related action items here</a>
-      </p>
+        ${newHighMatchCount > 0 ? `<p style="font-size: 14px; background-color: #e9f5ff; border: 1px solid #b3daff; padding: 10px 15px; border-radius: 4px; margin-bottom: 15px;"><b>Additionally:</b> You have <b>${newHighMatchCount}</b> candidate(s) in the 'NEW' stage with a Match Score of 4+ applied since ${ALERT_LAUNCH_DATE.toLocaleDateString()} who are awaiting review.</p>` : ''}
+
+        ${pendingNudgeCount > 0 ? `<p style="font-size: 14px; background-color: #fff3cd; border: 1px solid #ffeeba; padding: 10px 15px; border-radius: 4px; color: #856404; margin-bottom: 15px;"><b>Nudge Reminder:</b> You have <b>${pendingNudgeCount}</b> candidate(s) invited more than 2 days ago who are still in 'PENDING' status and may need a follow-up.</p>` : ''}
+
+        <p class="footer" style="margin-top: 10px; padding-top: 0; border-top: none; text-align: center;">
+          <a href="${ALERT_LOOKER_STUDIO_URL}" target="_blank" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 13px; border-bottom: 2px solid #0056b3; transition: background-color 0.2s ease;">Review all your AIR related action items here</a>
+        </p>
+
+      </div>
+      <!-- End Action Items Box -->
+
     </div>
   </body>
   </html>
@@ -833,6 +850,54 @@ function countNewHighMatchCandidates(recruiterEmail, appRows, appColIndices) {
   });
   Logger.log(`Found ${count} NEW, >=4*, Active, Post-Launch candidates for ${recruiterEmail}`);
   return count;
+}
+
+/**
+ * Counts candidates from log data needing a nudge (Pending > 2 days) for a given recruiter.
+ * Uses the deduplicated data to avoid multiple counts for the same profile+position.
+ * @param {string} recruiterEmail The email of the recruiter to filter by.
+ * @param {Array<Array>} deduplicatedLogRows Deduplicated rows from the log sheet.
+ * @param {object} logColIndices Column indices for the log sheet.
+ * @returns {number} The count of matching candidates.
+ */
+function countPendingCandidatesToNudge(recruiterEmail, deduplicatedLogRows, logColIndices) {
+  let nudgeCount = 0;
+  const recruiterIdx = logColIndices['Creator_user_id'];
+  const statusIdx = logColIndices['STATUS_COLUMN']; // Use the determined status column index
+  const emailSentIdx = logColIndices['Interview_email_sent_at'];
+  // Position name filter is already applied before deduplication in the main flow
+
+  const twoDaysInMillis = 2 * 24 * 60 * 60 * 1000;
+  const now = new Date().getTime();
+
+  // Status value to check for 'Pending' or similar invite statuses
+  // Using 'PENDING' based on user request, adjust if needed
+  const PENDING_STATUS_CHECK = 'PENDING'; 
+
+  deduplicatedLogRows.forEach(row => {
+    // Basic check for row validity and required columns
+    if (!row || row.length <= Math.max(recruiterIdx, statusIdx, emailSentIdx)) {
+      return; // Skip incomplete rows
+    }
+
+    const rowRecruiter = String(row[recruiterIdx] || '').trim().toLowerCase();
+    const status = String(row[statusIdx] || '').trim().toUpperCase(); // Normalize to uppercase
+    const emailSentDate = parseDateSafe(row[emailSentIdx]); // Use helper function
+
+    if (rowRecruiter === recruiterEmail.toLowerCase() &&
+        status === PENDING_STATUS_CHECK &&
+        emailSentDate) {
+          const timeSinceSent = now - emailSentDate.getTime();
+          if (timeSinceSent > twoDaysInMillis) {
+            nudgeCount++;
+          }
+    }
+  });
+
+  if (nudgeCount > 0) {
+      Logger.log(`Found ${nudgeCount} PENDING (>2 days) candidates needing nudge for ${recruiterEmail}`);
+  }
+  return nudgeCount;
 }
 
 // Helper function to safely parse dates (reusing from AIR_Gsheets logic if needed)
