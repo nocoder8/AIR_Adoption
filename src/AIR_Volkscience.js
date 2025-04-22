@@ -325,8 +325,6 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   };
 
   // --- Status Definitions (Using RAW values from sheet) ---
-  // Define statuses for interviews included in Sent-to-Scheduled calculation
-  const STATUSES_FOR_SCHED_TIME_CALC = ['SCHEDULED', 'COMPLETED']; // Check Interview Status_Real directly
   // Define statuses indicating completion (used for other metrics)
   const COMPLETED_STATUSES = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show']; // Raw values? Check case sensitivity
   // Define statuses considered "Pending"
@@ -384,34 +382,28 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
     metrics.byRecruiter[recruiterName].statusCounts[statusRaw] = (metrics.byRecruiter[recruiterName].statusCounts[statusRaw] || 0) + 1;
 
     // --- Check if Scheduled ---
-    // Check if the interview status qualifies for the Sent-to-Scheduled time calculation
-    const qualifiesForSchedTimeCalc = STATUSES_FOR_SCHED_TIME_CALC.includes(statusRaw);
-
-    // Parse scheduleDate if the column exists
-    let scheduleDate = null;
-    if (scheduledAtIdx !== -1) {
-         scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
-    }
-
-    // Calculate Sent to Scheduled Time only if status qualifies AND both dates are valid
-    if (qualifiesForSchedTimeCalc && sentDate && scheduleDate) {
-        const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate);
-        if (daysDiff !== null) { // Check handles negative difference
-          metrics.sentToScheduledDaysSum += daysDiff;
-          metrics.sentToScheduledCount++;
-          // TODO: Add breakdown timeline if needed
-        }
-    }
-
-    // --- Check if Scheduled (for breakdown counts) ---
-    // This uses the simpler definition for the table column
     let isScheduledForCount = (statusRaw === 'SCHEDULED');
 
     if (isScheduledForCount) {
-       metrics.totalScheduled++; // This count might become less meaningful now?
-       metrics.byJobFunction[jobFunc].scheduled++;
-       metrics.byCountry[country].scheduled++;
-       metrics.byRecruiter[recruiterName].scheduled++;
+         metrics.totalScheduled++; // This count might become less meaningful now?
+         metrics.byJobFunction[jobFunc].scheduled++;
+         metrics.byCountry[country].scheduled++;
+         metrics.byRecruiter[recruiterName].scheduled++;
+
+        // --- Calculate Sent to Scheduled Time ---
+        // Parse schedule date *only* if needed here and status is SCHEDULED
+        let scheduleDate = null;
+        if (scheduledAtIdx !== -1) {
+             scheduleDate = vsParseDateSafe(row[scheduledAtIdx]);
+        }
+        // Now calculate difference if both dates are valid
+        if (sentDate && scheduleDate) {
+             const daysDiff = vsCalculateDaysDifference(sentDate, scheduleDate);
+             if (daysDiff !== null) { // Check handles negative difference
+               metrics.sentToScheduledDaysSum += daysDiff;
+               metrics.sentToScheduledCount++;
+             }
+        }
     }
 
     // --- Check if Pending ---
@@ -472,6 +464,7 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
   // --- Calculate Final Rates and Averages ---
   if (metrics.totalSent > 0) {
       metrics.sentToScheduledRate = parseFloat(((metrics.totalScheduled / metrics.totalSent) * 100).toFixed(1));
+      metrics.completionRate = parseFloat(((metrics.totalCompleted / metrics.totalSent) * 100).toFixed(1)); // Overall Completion Rate
       // Calculate percentages for status distribution
       const statusCountsTemp = { ...metrics.interviewStatusDistribution }; // Copy raw counts
       metrics.interviewStatusDistribution = {}; // Reset to store objects
@@ -494,12 +487,13 @@ function calculateCompanyMetrics(filteredRows, colIndices) {
       }
    }
    if (metrics.sentToScheduledCount > 0) {
-       metrics.avgSentToScheduledDays = parseFloat((metrics.sentToScheduledDaysSum / metrics.sentToScheduledCount).toFixed(1));
+       metrics.avgTimeToScheduleDays = parseFloat((metrics.sentToScheduledDaysSum / metrics.sentToScheduledCount).toFixed(1));
+   } else {
+       metrics.avgTimeToScheduleDays = null; // Set to null if no valid data
    }
     if (metrics.completedToFeedbackCount > 0) {
         metrics.avgCompletedToFeedbackDays = parseFloat((metrics.completedToFeedbackDaysSum / metrics.completedToFeedbackCount).toFixed(1)); // Example
     }
-
 
   // --- Calculate Breakdown Metrics ---
   // Iterate through Job Functions
@@ -582,9 +576,6 @@ function createVolkscienceHtmlReport(metrics) {
       h1 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 25px; font-size: 26px; color: #1a237e; }
       h2 { margin-top: 30px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; }
       .metric-block { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; }
-      .metric { margin-bottom: 8px; font-size: 1.1em; }
-      .metric-label { font-weight: bold; color: #555; display: inline-block; width: 250px; }
-      .metric-value { font-weight: bold; color: #0056b3; }
       .rate { color: #1976d2; } /* Adjusted Blue for rates */
       .time { color: #dc3545; } /* Red for time */
       .count { color: #28a745; } /* Green for counts */
@@ -597,12 +588,17 @@ function createVolkscienceHtmlReport(metrics) {
       tr:nth-child(even) { background-color: #fafafa; } /* Alternating row color */
       .breakdown-section { margin-top: 25px; }
       .kpi-box { background-color: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px; padding: 20px; text-align: center; height: 150px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; }
-      .kpi-label { font-size: 16px; color: #333; margin-bottom: 5px; }
-      .kpi-value { font-size: 48px; font-weight: bold; color: #2e7d32; line-height: 1.1; }
-      .dashboard-table { width: 100%; border-collapse: separate; border-spacing: 20px 0; /* Increased horizontal spacing */ margin-bottom: 20px; }
-      .dashboard-cell { vertical-align: top; padding: 0; } /* Remove cell padding */
-      .dashboard-cell-left { width: 30%; }
-      .dashboard-cell-right { width: 70%; }
+      .kpi-label { font-size: 14px; color: #555; margin-bottom: 8px; line-height: 1.3; }
+      .kpi-value { font-size: 36px; font-weight: bold; color: #2e7d32; line-height: 1.1; }
+      .kpi-value .unit { font-size: 18px; font-weight: normal; margin-left: 2px; }
+      .kpi-box.completion { background-color: #e3f2fd; border-color: #bbdefb; } /* Blue for completion */
+      .kpi-box.completion .kpi-value { color: #1976d2; }
+      .kpi-box.time { background-color: #fff3e0; border-color: #ffe0b2; } /* Orange for time */
+      .kpi-box.time .kpi-value { color: #ef6c00; }
+      .kpi-box.stars { background-color: #f3e5f5; border-color: #e1bee7; } /* Purple for stars */
+      .kpi-box.stars .kpi-value { color: #8e24aa; }
+      .top-kpi-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; margin-bottom: 25px; }
+      .top-kpi-cell { width: 25%; vertical-align: top; padding: 0; }
       .section-container { background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; /* Removed bottom margin */ }
       .section-title { font-size: 16px; color: #424242; margin-bottom: 15px; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; font-weight: bold; }
       /* Bold first column in breakdown tables */
@@ -618,26 +614,37 @@ function createVolkscienceHtmlReport(metrics) {
         Data from ${metrics.reportStartDate} to ${metrics.reportEndDate} (Based on Interview Sent Date)
       </p>
 
-      <!-- Dashboard Layout Table -->
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="dashboard-table">
+      <!-- Top 4 KPI Boxes -->
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="top-kpi-table">
         <tr>
-          <td class="dashboard-cell dashboard-cell-left">
-            <!-- KPI Box -->
-            <div class="kpi-box">
+          <td class="top-kpi-cell">
+            <div class="kpi-box invitations">
               <div class="kpi-label">✉️ AI Invitations Sent</div>
               <div class="kpi-value">${metrics.totalSent}</div>
             </div>
           </td>
-          <td class="dashboard-cell dashboard-cell-right">
-            <!-- Daily Invitations Table -->
-            <div class="section-container">
-               <div class="section-title">Daily Invitations Sent</div>
-               ${generateTimeseriesTable(metrics.dailySentCounts)}
+          <td class="top-kpi-cell">
+            <div class="kpi-box completion">
+              <div class="kpi-label">✅ Completion Rate</div>
+              <div class="kpi-value">${metrics.completionRate}<span class="unit">%</span></div>
+            </div>
+          </td>
+          <td class="top-kpi-cell">
+            <div class="kpi-box time">
+              <div class="kpi-label">⏱️ Avg Time Sent to Completion*</div>
+              <div class="kpi-value">${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span class="unit">days</span></div>
+            </div>
+          </td>
+          <td class="top-kpi-cell">
+            <div class="kpi-box stars">
+              <div class="kpi-label">⭐ Avg Match Stars (Completed)</div>
+              <div class="kpi-value">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</div>
             </div>
           </td>
         </tr>
       </table>
 
+      <!-- Interview Completion Status -->
       <div class="metric-block">
           <div class="section-title">📊 Interview Completion Status</div>
            <table class="data-table centered-table">
@@ -657,10 +664,10 @@ function createVolkscienceHtmlReport(metrics) {
           <p class="note">Percentage is based on the total number of interviews sent in the period.</p>
       </div>
 
-      <h2>⏱️ Key Timelines & Metrics</h2>
-      <div class="metric-block">
-        <div class="metric"><span class="metric-label">Avg. Time Sent to Scheduled:</span> <span class="metric-value time">${metrics.avgSentToScheduledDays !== null ? metrics.avgSentToScheduledDays + ' days' : 'N/A'}</span></div>
-        <div class="metric"><span class="metric-label">Avg. Match Stars (Completed):</span> <span class="metric-value">${metrics.avgMatchStars !== null ? '⭐ ' + metrics.avgMatchStars : 'N/A'}</span></div>
+      <!-- Daily Invitations Sent -->
+      <div class="section-container">
+         <div class="section-title">🗓️ Daily Invitations Sent</div>
+         ${generateTimeseriesTable(metrics.dailySentCounts)}
       </div>
 
       <div class="breakdown-section">
@@ -757,7 +764,10 @@ function createVolkscienceHtmlReport(metrics) {
           </table>
       </div>
 
-      <p class="note" style="text-align: center; margin-top: 30px;">Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.</p>
+      <p class="note" style="text-align: center; margin-top: 30px;">
+        *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
+        Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
+      </p>
     </div>
   </body>
   </html>
