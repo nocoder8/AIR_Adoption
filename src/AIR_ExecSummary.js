@@ -1,4 +1,4 @@
-// AIR Volkscience - Company-Level AI Interview Analytics Script v1.0
+// AIR Volkscience - Exec Summary - Company-Level AI Interview Analytics Script v1.0
 // This script analyzes data from the Log_Enhanced sheet to provide company-wide insights
 // into the AI interview process funnel, timelines, and outcomes.
 

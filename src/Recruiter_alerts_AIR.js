@@ -145,15 +145,15 @@ function sendRecruiterAlerts() {
           // Pass the new counts to the HTML function
           const htmlBody = createAlertEmailHtml(recruiterEmail, candidatesForRecruiter, logData.colIndices, newHighMatchCount, pendingNudgeCount);
           const subject = "Urgent: Review AI Screening Feedback";
-          // --- TESTING: Send to pkumar instead of actual recruiter ---
-          const testRecipient = 'pkumar@eightfold.ai'; // <-- STILL SET FOR TESTING
-          const testSubject = `[TEST Alert For ${recruiterEmail}] Urgent: Review AI Screening Feedback`;
-          MailApp.sendEmail(testRecipient, testSubject, "", { htmlBody: htmlBody, noReply: true }); // <-- STILL SENDING TO testRecipient
-          Logger.log(`TEST: Sent alert intended for ${recruiterEmail} to ${testRecipient} for ${candidatesForRecruiter.length} candidate(s).`);
-          // --- Original Line (Restore after testing): ---
-          // MailApp.sendEmail(recruiterEmail, subject, "", { htmlBody: htmlBody, noReply: true }); // <-- Original is still commented out
-          // Logger.log(`Sent alert email to ${recruiterEmail} for ${candidatesForRecruiter.length} candidate(s).`);
-          // --- End Testing Modification ---
+          // --- TESTING Block Removed ---
+          // const testRecipient = 'pkumar@eightfold.ai';
+          // const testSubject = `[TEST Alert For ${recruiterEmail}] Urgent: Review AI Screening Feedback`;
+          // MailApp.sendEmail(testRecipient, testSubject, "", { htmlBody: htmlBody, noReply: true });
+          // Logger.log(`TEST: Sent alert intended for ${recruiterEmail} to ${testRecipient} for ${candidatesForRecruiter.length} candidate(s).`);
+          // --- Restore original sending logic ---
+          MailApp.sendEmail(recruiterEmail, subject, "", { htmlBody: htmlBody, noReply: true });
+          Logger.log(`Sent alert email to ${recruiterEmail} for ${candidatesForRecruiter.length} candidate(s).`);
+          // --- End Restoration ---
           emailsSent++;
         } catch (emailError) {
           Logger.log(`ERROR sending email to ${recruiterEmail}: ${emailError.toString()}`);
@@ -559,6 +559,34 @@ function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMat
 function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
   // Sort all candidates by Time_since_interview_completion_days descending
   const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
+  const recruiterEmailIdx = colIndices['Creator_user_id']; // Added for summary
+
+  // --- Generate Summary Table Data ---
+  const recruiterCounts = {};
+  allAlertCandidates.forEach(row => {
+      if (row && row.length > recruiterEmailIdx) {
+          const recruiterEmail = String(row[recruiterEmailIdx] || 'N/A').trim().toLowerCase();
+          if (recruiterEmail !== 'n/a' && recruiterEmail.includes('@')) { // Basic check
+              recruiterCounts[recruiterEmail] = (recruiterCounts[recruiterEmail] || 0) + 1;
+          }
+      }
+  });
+
+  // Sort recruiters alphabetically for the summary table
+  const sortedRecruiters = Object.keys(recruiterCounts).sort();
+
+  let summaryTableRowsHtml = '';
+  sortedRecruiters.forEach(email => {
+      summaryTableRowsHtml += `
+        <tr>
+          <td style="border: 1px solid #ddd; padding: 6px 8px; font-size: 12px;">${email}</td>
+          <td style="border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; text-align: center;">${recruiterCounts[email]}</td>
+        </tr>
+      `;
+  });
+  // --- End Summary Table Data ---
+
+  // --- Generate Detailed Table Data (Existing Logic) ---
   allAlertCandidates.sort((a, b) => {
       const timeA = parseFloat(a[timeSinceIdx]) || 0;
       const timeB = parseFloat(b[timeSinceIdx]) || 0;
@@ -567,7 +595,7 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
 
   let tableRowsHtml = '';
   allAlertCandidates.forEach(row => {
-      const recruiterEmail = row[colIndices['Creator_user_id']] || 'N/A';
+      const recruiterEmail = row[recruiterEmailIdx] || 'N/A';
       const candidateName = row[colIndices['Candidate_name']] || 'N/A';
       const profileLink = row[colIndices['Profile_link']] || '#';
       const currentCompany = row[colIndices['Current_company']] || 'N/A';
@@ -617,6 +645,20 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
       <h2>Admin Digest: AI Feedback Awaiting Review (${allAlertCandidates.length} total)</h2>
       <p>This digest lists all candidates whose AI screening feedback is marked '${ALERT_FEEDBACK_AI_RECOMMENDED}' and has been awaiting review for more than ${ALERT_DAYS_THRESHOLD} day(s) but less than or equal to ${ALERT_STOP_DAYS_THRESHOLD} days.</p>
 
+      <h3>Summary by Recruiter</h3>
+      <table style="width: auto; margin-bottom: 25px;"> <!-- Adjusted width and margin -->
+        <thead>
+          <tr>
+            <th style="border: 1px solid #ddd; padding: 8px 10px; background-color: #f5f5f5; font-weight: bold; text-transform: uppercase; font-size: 11px; color: #555; text-align: left;">Recruiter Email</th>
+            <th style="border: 1px solid #ddd; padding: 8px 10px; background-color: #f5f5f5; font-weight: bold; text-transform: uppercase; font-size: 11px; color: #555; text-align: center;">Pending Items</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${summaryTableRowsHtml}
+        </tbody>
+      </table>
+
+      <h3>Detailed List</h3>
       <table>
         <thead>
           <tr>
