@@ -29,26 +29,27 @@ function createRecruiterBreakdownTrigger() {
   // Delete existing triggers for this function to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'AIR_RecruiterBreakdown_Daily') {
+    if (triggers[i].getHandlerFunction() === 'AIR_DailySummarytoAP') { // Updated Handler Name
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
   // Create a new trigger to run daily at 10 AM
-  ScriptApp.newTrigger('AIR_RecruiterBreakdown_Daily')
+  ScriptApp.newTrigger('AIR_DailySummarytoAP') // Updated Handler Name
     .timeBased()
     .everyDays(1) // Run daily
     .atHour(10) // Keep 10 AM or adjust as needed
     .create();
-  Logger.log(`Daily trigger created for AIR_RecruiterBreakdown_Daily (at 10 AM)`);
+  Logger.log(`Daily trigger created for AIR_DailySummarytoAP (at 10 AM)`);
   // SpreadsheetApp.getUi().alert(`Daily trigger created for ${VS_COMPANY_NAME_RB} AI Interview Recruiter Report (at 10 AM).`); // Removed: Cannot call getUi from trigger context
 }
 
 /**
  * Main function to generate and send the company-level AI interview report with recruiter breakdown.
+ * Renamed from AIR_RecruiterBreakdown_Daily.
  */
-function AIR_RecruiterBreakdown_Daily() {
+function AIR_DailySummarytoAP() {
   try {
-    Logger.log(`--- Starting ${VS_COMPANY_NAME_RB} AI Interview Recruiter Report Generation ---`);
+    Logger.log(`--- Starting ${VS_COMPANY_NAME_RB} AI Interview Daily Summary Report Generation ---`); // Updated log
 
     // 1. Get Log Sheet Data (Uses RB config)
     const logData = getLogSheetDataRB();
@@ -107,16 +108,92 @@ function AIR_RecruiterBreakdown_Daily() {
          return;
     }
 
-    // 2c. Deduplicate by Profile_id + Position_id, prioritizing by status rank
+    // <<< Calculate Recruiter Last Sent Activity & Daily Trends >>>
+    const recruiterLastSentMap = new Map();
+    const recruiterDailyCounts = new Map(); // Map<RecruiterName, Map<DateString, Count>>
+    const recruiterNameIdx_Log = logData.colIndices.hasOwnProperty('Recruiter_name') ? logData.colIndices['Recruiter_name'] : -1;
+    const emailSentIdx_Log = logData.colIndices['Interview_email_sent_at']; // Already required
+
+    if (recruiterNameIdx_Log !== -1) {
+        finalFilteredData.forEach(row => {
+            if (row.length > Math.max(recruiterNameIdx_Log, emailSentIdx_Log)) {
+                const recruiterName = row[recruiterNameIdx_Log]?.trim();
+                const rawSentDate = row[emailSentIdx_Log];
+                if (recruiterName && recruiterName !== 'Unknown' && rawSentDate) {
+                    const sentDate = vsParseDateSafeRB(rawSentDate);
+                    if (sentDate) {
+                        // Update Last Sent Date
+                        if (!recruiterLastSentMap.has(recruiterName) || sentDate > recruiterLastSentMap.get(recruiterName)) {
+                            recruiterLastSentMap.set(recruiterName, sentDate);
+                        }
+
+                        // Update Daily Count
+                        const dateString = vsFormatDateRB(sentDate); // Use consistent format for map key
+                        if (!recruiterDailyCounts.has(recruiterName)) {
+                             recruiterDailyCounts.set(recruiterName, new Map());
+                        }
+                        const dailyMap = recruiterDailyCounts.get(recruiterName);
+                        dailyMap.set(dateString, (dailyMap.get(dateString) || 0) + 1);
+                    }
+                }
+            }
+        });
+        Logger.log(`Found last sent dates for ${recruiterLastSentMap.size} recruiters and daily counts.`);
+    } else {
+        Logger.log(`Recruiter_name column not found in log sheet, cannot calculate last sent activity or trends.`);
+    }
+
+    const recruiterActivityData = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Use start of today
+
+    // Generate dates for the last 10 days (yesterday back to 10 days ago)
+    const trendDates = [];
+    for (let i = 1; i <= 10; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() - i);
+        trendDates.push(date);
+    }
+
+    recruiterLastSentMap.forEach((lastDate, recruiter) => {
+        const timeDiff = today.getTime() - lastDate.getTime();
+        const daysAgo = Math.floor(timeDiff / (1000 * 60 * 60 * 24)); // Calculate whole days
+
+        // Build Daily Trend String
+        const dailyMap = recruiterDailyCounts.get(recruiter);
+        const trendValues = trendDates.map(date => {
+            const dayOfWeek = date.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+            if (dayOfWeek === 0) return 'Sun';
+            if (dayOfWeek === 6) return 'Sat';
+            const dateString = vsFormatDateRB(date);
+            return dailyMap?.get(dateString) || 0;
+        });
+        const dailyTrend = trendValues.join(',');
+
+        recruiterActivityData.push({ recruiter: recruiter, daysAgo: daysAgo, dailyTrend: dailyTrend });
+    });
+
+    // Sort by days ago (most recent first), then alphabetically
+    recruiterActivityData.sort((a, b) => {
+        if (a.daysAgo !== b.daysAgo) {
+            return a.daysAgo - b.daysAgo;
+        }
+        return a.recruiter.localeCompare(b.recruiter);
+    });
+    // <<< End Recruiter Last Sent Activity Calculation >>>
+
+    // <<< RESTORED: Deduplicate by Profile_id + Position_id, prioritizing by status rank >>>
     const profileIdIndex = logData.colIndices['Profile_id'];
     const positionIdIndex = logData.colIndices['Position_id'];
     const statusIndex = logData.colIndices['STATUS_COLUMN']; // Get the index determined earlier
     const groupedData = {}; // Key: "profileId_positionId", Value: { bestRank: rank, row: rowData }
+    let skippedRowCount = 0;
 
     finalFilteredData.forEach(row => {
         // Ensure row has the necessary columns
-        if (row.length <= profileIdIndex || row.length <= positionIdIndex || row.length <= statusIndex) {
-            Logger.log(`Skipping row during grouping due to missing ID or Status columns. Row: ${JSON.stringify(row)}`);
+        if (!row || row.length <= profileIdIndex || row.length <= positionIdIndex || row.length <= statusIndex) {
+            skippedRowCount++;
+            // Logger.log(`Skipping row during grouping due to missing ID or Status columns. Row: ${JSON.stringify(row)}`);
             return; // Skip this row
         }
         const profileId = row[profileIdIndex];
@@ -124,7 +201,8 @@ function AIR_RecruiterBreakdown_Daily() {
         const status = row[statusIndex] ? String(row[statusIndex]).trim() : 'Unknown';
 
         if (!profileId || !positionId) { // Check for blank IDs
-            Logger.log(`Skipping row during grouping due to blank Profile_id or Position_id. Row: ${JSON.stringify(row)}`);
+             skippedRowCount++;
+            // Logger.log(`Skipping row during grouping due to blank Profile_id or Position_id. Row: ${JSON.stringify(row)}`);
             return; // Skip rows with blank IDs
         }
 
@@ -138,6 +216,10 @@ function AIR_RecruiterBreakdown_Daily() {
         // If an entry exists and current rank is not better, do nothing (keep the existing better row)
     });
 
+    if (skippedRowCount > 0) {
+        Logger.log(`Skipped ${skippedRowCount} rows during deduplication due to missing IDs, status, or incomplete row data.`);
+    }
+
     // Extract the best row for each unique key
     const deduplicatedData = Object.values(groupedData).map(entry => entry.row);
 
@@ -148,28 +230,29 @@ function AIR_RecruiterBreakdown_Daily() {
          Logger.log(`No data remaining after deduplication. Skipping report.`);
          return;
     }
+    // <<< END RESTORED BLOCK >>>
 
     // 3. Calculate Metrics (Uses RB calculator)
     const metrics = calculateCompanyMetricsRB(deduplicatedData, logData.colIndices);
     Logger.log('Successfully calculated company metrics with recruiter breakdown.');
     // Logger.log(`Calculated Metrics: ${JSON.stringify(metrics)}`); // Optional: Log detailed metrics
 
-    // 4. Create HTML Report (Uses RB creator) - Pass adoption data
-    const htmlContent = createRecruiterBreakdownHtmlReport(metrics, adoptionChartData);
+    // 4. Create HTML Report (Uses RB creator) - Pass adoption, activity data, and log recruiter index
+    const htmlContent = createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log);
     Logger.log('Successfully generated HTML report content.');
 
     // 5. Send Email (Uses RB functions/config)
     // Set static subject line for this specific report
-    const reportTitle = `AI Recruiter Adoption: Recruiter Breakdown Report (EF4EF)`;
+    const reportTitle = `AI Recruiter Adoption: Daily Summary`; // <<< Renamed Subject
     sendVsEmailRB(VS_EMAIL_RECIPIENT_RB, VS_EMAIL_CC_RB, reportTitle, htmlContent);
 
-    Logger.log(`--- AI Recruiter Adoption: Recruiter Breakdown Report generated and sent successfully! ---`);
+    Logger.log(`--- AI Recruiter Adoption: Daily Summary generated and sent successfully! ---`); // Updated log message
     return `Report sent to ${VS_EMAIL_RECIPIENT_RB}`;
 
   } catch (error) {
-    Logger.log(`Error in AIR_RecruiterBreakdown_Daily: ${error.toString()} Stack: ${error.stack}`);
+    Logger.log(`Error in AIR_DailySummarytoAP: ${error.toString()} Stack: ${error.stack}`); // Updated log
     // Send error email (Uses RB notifier)
-    sendVsErrorNotificationRB(`ERROR generating AI Recruiter Adoption: Recruiter Breakdown Report: ${error.toString()}`, error.stack);
+    sendVsErrorNotificationRB(`ERROR generating AI Recruiter Adoption: Daily Summary: ${error.toString()}`, error.stack);
     return `Error: ${error.toString()}`;
   }
 }
@@ -251,7 +334,7 @@ function getLogSheetDataRB() {
   const missingCols = [];
 
   // --- Find Status Column --- Enforce Interview Status_Real ---
-  const statusColName = 'Interview Status_Real';
+  const statusColName = 'Interview_status_real'; // <<< Updated name
   const statusColIndex = headers.indexOf(statusColName);
   if (statusColIndex !== -1) {
       colIndices['STATUS_COLUMN'] = statusColIndex;
@@ -533,12 +616,21 @@ function filterDataByTimeRangeRB(rows, colIndices) {
  * @returns {object} An object containing calculated metrics.
  */
 function calculateCompanyMetricsRB(filteredRows, colIndices) {
+  const COMPLETION_RATE_MATURITY_DAYS_RB = 1; // Exclude invites sent < 1 day ago for KPI box calc
+
+  // Calculate the exact timestamp 24 hours ago from now
+  const now = new Date();
+  const cutoffTimestampForCompletionRate = now.getTime() - (48 * 60 * 60 * 1000); // Use 48 hours
+  const cutoffDateForLog = new Date(cutoffTimestampForCompletionRate);
+  Logger.log(`Calculating KPI box completion rate only for invites sent before ${cutoffDateForLog.toLocaleString()} (48-hour cutoff)`);
+
+
   const metrics = {
     reportStartDate: (() => { const d = new Date(); d.setDate(d.getDate() - VS_REPORT_TIME_RANGE_DAYS_RB); return vsFormatDateRB(d); })(), // Use RB config/helpers
     reportEndDate: vsFormatDateRB(new Date()), // Use RB helper
-    totalSent: filteredRows.length,
+    totalSent: filteredRows.length, // This remains the absolute total after filtering/deduplication
     totalScheduled: 0,
-    totalCompleted: 0,
+    totalCompleted: 0, // Absolute total completed
     totalFeedbackSubmitted: 0,
     sentToScheduledRate: 0,
     scheduledToCompletedRate: 0,
@@ -557,12 +649,17 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
     byCountry: {},
     byRecruiter: {}, // <<< ADDED Recruiter Breakdown
     // Timeseries data
-    dailySentCounts: {}
+    dailySentCounts: {},
+    // --- Counters and Rates for KPI Box ---
+    matureKpiTotalSent: 0,       // Denominator for adjusted KPI rate
+    matureKpiTotalCompleted: 0,  // Numerator for adjusted KPI rate
+    kpiCompletionRateAdjusted: 0,// The adjusted rate (%) for the KPI box
+    completionRateOriginal: 0    // The original rate (%) using all invites (for footnote)
   };
 
   // --- Status Definitions (Consistent) ---
   const STATUSES_FOR_AVG_TIME_CALC = ['SCHEDULED', 'COMPLETED'];
-  const COMPLETED_STATUSES = ['COMPLETED', 'Feedback Provided', 'Pending Feedback', 'No Show'];
+  const COMPLETED_STATUSES = ['COMPLETED']; // <<< UPDATED: Strict definition for all metrics
   const PENDING_STATUSES = ['PENDING', 'INVITED', 'EMAIL SENT'];
   const FEEDBACK_SUBMITTED_STATUS = 'Submitted';
   const RECRUITER_SUBMISSION_AWAITED_FEEDBACK = 'AI_RECOMMENDED';
@@ -580,19 +677,27 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
   const recruiterIdx = colIndices.hasOwnProperty('Recruiter_name') ? colIndices['Recruiter_name'] : -1; // <<< GET Recruiter Index
 
   filteredRows.forEach(row => {
-    // --- Get Sent Date for Timeseries ---
-    const sentDate = vsParseDateSafeRB(row[sentAtIdx]); // Use RB helper
-    if (sentDate) {
-        const dateString = vsFormatDateRB(sentDate); // Use RB helper
-        metrics.dailySentCounts[dateString] = (metrics.dailySentCounts[dateString] || 0) + 1;
-    }
-
-    // --- Get Core Values ---
+    // <<< MOVED: Define core values at the beginning of the loop >>>
     const statusRaw = row[statusIdx] ? String(row[statusIdx]).trim() : 'Unknown';
     const jobFunc = (jobFuncIdx !== -1 && row[jobFuncIdx]) ? String(row[jobFuncIdx]).trim() : 'Unknown';
     const country = (countryIdx !== -1 && row[countryIdx]) ? String(row[countryIdx]).trim() : 'Unknown';
     const recruiter = (recruiterIdx !== -1 && row[recruiterIdx]) ? String(row[recruiterIdx]).trim() : 'Unknown'; // <<< GET Recruiter Name
     const feedbackStatusRaw = (feedbackStatusIdx !== -1 && row[feedbackStatusIdx]) ? String(row[feedbackStatusIdx]).trim() : '';
+
+    // --- Get Sent Date ---
+    const sentDate = vsParseDateSafeRB(row[sentAtIdx]); // Use RB helper
+    const isMatureForCompletionRate = sentDate && sentDate.getTime() < cutoffTimestampForCompletionRate; // Check if sent *before* the exact 24hr cutoff timestamp
+
+    // --- Increment Mature Sent Count for KPI ---
+    if (isMatureForCompletionRate) {
+        metrics.matureKpiTotalSent++;
+    }
+
+    // --- Daily Sent Counts ---
+    if (sentDate) {
+        const dateString = vsFormatDateRB(sentDate); // Use RB helper
+        metrics.dailySentCounts[dateString] = (metrics.dailySentCounts[dateString] || 0) + 1;
+    }
 
     // --- Initialize Breakdown Structures if they don't exist ---
     if (!metrics.byJobFunction[jobFunc]) {
@@ -605,7 +710,7 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
         metrics.byRecruiter[recruiter] = { sent: 0, scheduled: 0, completed: 0, pending: 0, feedbackSubmitted: 0, recruiterSubmissionAwaited: 0, statusCounts: {} };
     }
 
-    // --- Increment Base Counts ---
+    // --- Increment Base Counts (These always use the total number of records processed) ---
     metrics.byJobFunction[jobFunc].sent++;
     metrics.byCountry[country].sent++;
     metrics.byRecruiter[recruiter].sent++; // <<< INCREMENT Recruiter Sent
@@ -615,6 +720,7 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
     metrics.byRecruiter[recruiter].statusCounts[statusRaw] = (metrics.byRecruiter[recruiter].statusCounts[statusRaw] || 0) + 1; // <<< INCREMENT Recruiter Status Count
 
     // --- Calculate Avg Time Sent to Completion (Scheduled) ---
+    // (No change needed here)
     if (STATUSES_FOR_AVG_TIME_CALC.includes(statusRaw)) {
         const candidateName = (candidateNameIdx !== -1 && row[candidateNameIdx]) ? row[candidateNameIdx] : 'Unknown Candidate';
         const scheduleDateForAvg = (scheduledAtIdx !== -1) ? vsParseDateSafeRB(row[scheduledAtIdx]) : null; // Use RB helper
@@ -647,10 +753,15 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
     // --- Check if Completed ---
     let isCompleted = COMPLETED_STATUSES.includes(statusRaw);
     if (isCompleted) {
-      metrics.totalCompleted++;
-      metrics.byJobFunction[jobFunc].completed++;
-      metrics.byCountry[country].completed++;
-      metrics.byRecruiter[recruiter].completed++; // <<< INCREMENT Recruiter Completed
+      metrics.totalCompleted++; // Increment original total completed
+      metrics.byJobFunction[jobFunc].completed++; // Increment original breakdown completed
+      metrics.byCountry[country].completed++;     // Increment original breakdown completed
+      metrics.byRecruiter[recruiter].completed++; // Increment original breakdown completed
+
+      // Increment Mature Completed Count for KPI (ONLY if mature)
+      if (isMatureForCompletionRate) {
+          metrics.matureKpiTotalCompleted++;
+      }
 
       // --- Calculate Match Stars ---
        if (matchStarsIdx !== -1 && row[matchStarsIdx] !== null && row[matchStarsIdx] !== '') {
@@ -679,9 +790,21 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
   });
 
   // --- Calculate Final Rates and Averages ---
+
+  // Calculate ORIGINAL Completion Rate (for footnote)
+  if (metrics.totalSent > 0) {
+      metrics.completionRateOriginal = parseFloat(((metrics.totalCompleted / metrics.totalSent) * 100).toFixed(1));
+  }
+
+  // Calculate ADJUSTED Completion Rate (for KPI Box)
+  if (metrics.matureKpiTotalSent > 0) {
+      metrics.kpiCompletionRateAdjusted = parseFloat(((metrics.matureKpiTotalCompleted / metrics.matureKpiTotalSent) * 100).toFixed(1));
+  }
+
+  // Calculate other original rates
   if (metrics.totalSent > 0) {
       metrics.sentToScheduledRate = parseFloat(((metrics.totalScheduled / metrics.totalSent) * 100).toFixed(1));
-      metrics.completionRate = parseFloat(((metrics.totalCompleted / metrics.totalSent) * 100).toFixed(1));
+      // Update status distribution calculation (uses totalSent)
       const statusCountsTemp = { ...metrics.interviewStatusDistribution };
       metrics.interviewStatusDistribution = {};
       for (const status in statusCountsTemp) {
@@ -716,14 +839,23 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
          metrics.avgCompletedToFeedbackDays = null; // Example, if calculation added later
     }
 
+    // <<< DEBUG LOGGING for KPI Rate >>>
+    Logger.log(`KPI Rate Calculation: Mature Sent (Denominator) = ${metrics.matureKpiTotalSent}`);
+    Logger.log(`KPI Rate Calculation: Mature Completed [Strict 'COMPLETED'] (Numerator) = ${metrics.matureKpiTotalCompleted}`);
+    if (metrics.matureKpiTotalSent > 0) {
+        Logger.log(`KPI Rate Calculation: Adjusted Rate = (${metrics.matureKpiTotalCompleted} / ${metrics.matureKpiTotalSent}) * 100 = ${metrics.kpiCompletionRateAdjusted}%`);
+    } else {
+        Logger.log(`KPI Rate Calculation: Adjusted Rate = N/A (Mature Sent is 0)`);
+    }
+    // <<< END DEBUG LOGGING >>>
 
-  // --- Calculate Breakdown Metrics ---
+  // --- Calculate Breakdown Metrics (Using ORIGINAL 'sent' and 'completed' counts for percentages) ---
   // Job Functions
   for (const func in metrics.byJobFunction) {
     const data = metrics.byJobFunction[func];
     data.scheduledRate = data.sent > 0 ? parseFloat(((data.scheduled / data.sent) * 100).toFixed(1)) : 0;
-    data.completedNumber = data.completed;
-    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+    data.completedNumber = data.completed; // Use original completed count
+    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0; // Use original counts for %
     data.pendingNumber = data.pending;
     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
     data.feedbackRate = data.completed > 0 ? parseFloat(((data.feedbackSubmitted / data.completed) * 100).toFixed(1)) : 0;
@@ -732,19 +864,19 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
   // Countries
   for (const ctry in metrics.byCountry) {
     const data = metrics.byCountry[ctry];
-    data.completedNumber = data.completed;
-    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+    data.completedNumber = data.completed; // Use original completed count
+    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0; // Use original counts for %
     data.pendingNumber = data.pending;
     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
     // Add other country-specific metrics here if needed
   }
 
-  // Recruiters <<< CALCULATE Recruiter Breakdown Metrics
+  // Recruiters <<< CALCULATE Recruiter Breakdown Metrics (Using ORIGINAL counts)
   for (const rec in metrics.byRecruiter) {
     const data = metrics.byRecruiter[rec];
     // data.scheduledRate = data.sent > 0 ? parseFloat(((data.scheduled / data.sent) * 100).toFixed(1)) : 0; // Optional
-    data.completedNumber = data.completed;
-    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0;
+    data.completedNumber = data.completed; // Use original completed count
+    data.completedPercentOfSent = data.sent > 0 ? parseFloat(((data.completed / data.sent) * 100).toFixed(1)) : 0; // Use original counts for %
     data.pendingNumber = data.pending;
     data.pendingPercentOfSent = data.sent > 0 ? parseFloat(((data.pending / data.sent) * 100).toFixed(1)) : 0;
     data.feedbackRate = data.completed > 0 ? parseFloat(((data.feedbackSubmitted / data.completed) * 100).toFixed(1)) : 0; // Optional
@@ -752,6 +884,7 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
 
 
   Logger.log(`Metrics calculation complete (Recruiter). Total Sent: ${metrics.totalSent}, Completed: ${metrics.totalCompleted}`);
+  Logger.log(`KPI Completion Rate (Adjusted): ${metrics.kpiCompletionRateAdjusted}%, Original Rate: ${metrics.completionRateOriginal}%`); // Log both rates
   metrics.colIndices = colIndices;
   return metrics;
 }
@@ -759,420 +892,457 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
 // --- Reporting Functions ---
 
 /**
+ * Generates the HTML for the table rows of the Recruiter Breakdown section.
+ * Sorts recruiters by 'Sent' count descending and adds medals.
+ * @param {object} recruiterData The metrics.byRecruiter object.
+ * @returns {string} HTML string for the table body rows.
+ */
+function generateRecruiterTableRowsHtml(recruiterData) {
+    if (!recruiterData || Object.keys(recruiterData).length === 0) {
+        return '<tr><td colspan="7" style="text-align:center; padding: 10px; border: 1px solid #e0e0e0; font-size: 12px;">No recruiter data found or Recruiter_name column missing.</td></tr>';
+    }
+
+    // Sort recruiters by Sent descending, keeping Unknown last
+    const sortedRecruiters = Object.entries(recruiterData)
+        .sort(([recA, dataA], [recB, dataB]) => {
+            if (recA === 'Unknown') return 1;
+            if (recB === 'Unknown') return -1;
+            return dataB.sent - dataA.sent;
+        });
+
+    // Create a map for medals for the top 3 (excluding Unknown)
+    const medals = ['🥇', '🥈', '🥉'];
+    const recruiterMedalMap = {};
+    sortedRecruiters
+        .filter(([rec]) => rec !== 'Unknown')
+        .slice(0, 3)
+        .forEach(([rec], index) => {
+            recruiterMedalMap[rec] = medals[index];
+        });
+
+    // Generate table rows HTML
+    return sortedRecruiters
+        .map(([rec, data], index) => {
+            const medal = recruiterMedalMap[rec] || ''; // Get medal or empty string
+            const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
+            return `
+                <tr style="background-color: ${bgColor};">
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${medal}${medal ? ' ' : ''}${rec}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
+                </tr>
+            `;
+        }).join('');
+}
+
+/**
  * Creates the HTML email report including recruiter breakdown.
+ * Uses inline styles and table layouts for better email client compatibility.
  * @param {object} metrics The calculated metrics object.
  * @param {object} adoptionChartData The calculated adoption chart data object.
+ * @param {Array<object>} recruiterActivityData Array of {recruiter: string, daysAgo: number, dailyTrend: string}.
+ * @param {number} recruiterNameIdx_Log The index of the Recruiter_name column from the log sheet (-1 if not found).
  * @returns {string} The HTML content for the email body.
  */
-function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData) {
+function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log) {
 
-  // --- Helper to generate timeseries table (consistent) ---
+  // Helper to generate timeseries table (limited to last 7 days)
   const generateTimeseriesTable = (dailyCounts) => {
       const sortedDates = Object.keys(dailyCounts).sort((a, b) => {
           try {
-              const dateA = new Date(a.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
-              const dateB = new Date(b.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
-              // Sort descending (newest first)
-              return dateB - dateA;
-          } catch (e) { 
-              // Fallback to string sort if parsing fails (might not be ideal date sort)
-              return b.localeCompare(a); 
-          }
+              // Parsing DD-MMM-YY format
+              const dateA = new Date(a.replace(/(\\d{2})-(\\w{3})-(\\d{2})/, '$2 $1, 20$3'));
+              const dateB = new Date(b.replace(/(\\d{2})-(\\w{3})-(\\d{2})/, '$2 $1, 20$3'));
+              return dateB - dateA; // Descending
+          } catch (e) { return b.localeCompare(a); }
       });
 
-      // --- Filter for the last 7 days ---
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      sevenDaysAgo.setHours(0, 0, 0, 0); // Start of the day 7 days ago
+      sevenDaysAgo.setHours(0, 0, 0, 0);
 
       const filteredDates = sortedDates.filter(dateStr => {
           try {
-              // Need to parse the date string back to compare
-              const date = new Date(dateStr.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
+              const date = new Date(dateStr.replace(/(\\d{2})-(\\w{3})-(\\d{2})/, '$2 $1, 20$3'));
               return date >= sevenDaysAgo;
-          } catch (e) {
-              return false; // Exclude if parsing fails
-          }
+          } catch (e) { return false; }
       });
-      // --- End Filter ---
 
-      if (filteredDates.length === 0) return '<p class="note">No interview invitations sent in the last 7 days.</p>'; // Updated message
-      let tableHtml = '<table class="data-table"><thead><tr><th>🗓️ Date (DD-MMM-YY)</th><th>✉️ Invitations Sent</th></tr></thead><tbody>';
-      filteredDates.forEach(date => { tableHtml += `<tr><td>${date}</td><td>${dailyCounts[date]}</td></tr>`; });
+      if (filteredDates.length === 0) return '<p style="font-size: 0.85em; color: #757575; margin-top: 15px; text-align: center;">No interview invitations sent in the last 7 days.</p>';
+
+      let tableHtml = '<table align="center" border="0" cellpadding="0" cellspacing="0" width="90%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;"><thead><tr><th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">🗓️ Date (DD-MMM-YY)</th><th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">✉️ Invitations Sent</th></tr></thead><tbody>';
+      filteredDates.forEach((date, index) => {
+          const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
+          tableHtml += `<tr style="background-color: ${bgColor};"><td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle;">${date}</td><td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${dailyCounts[date]}</td></tr>`;
+      });
       tableHtml += '</tbody></table>';
       return tableHtml;
   };
 
-  // Define recruiterIdx early to use in the template literal
-  // Use the metrics object passed to the function to access colIndices
-  // Ensure colIndices is passed correctly to createRecruiterBreakdownHtmlReport from AIR_RecruiterBreakdown_Daily
-  const colIndices = metrics.colIndices; // Assuming metrics object contains colIndices
-  const recruiterIdx = colIndices && colIndices.hasOwnProperty('Recruiter_name') ? colIndices['Recruiter_name'] : -1;
-
-  // Safely access adoption chart properties
+  const recruiterIdx = metrics.colIndices && metrics.colIndices.hasOwnProperty('Recruiter_name') ? metrics.colIndices['Recruiter_name'] : -1;
   const hasAdoptionData = adoptionChartData && adoptionChartData.recruiterAdoptionData && adoptionChartData.recruiterAdoptionData.length > 0;
   const hasMatchStarsColumnForAdoption = adoptionChartData && adoptionChartData.hasMatchStarsColumn;
   const adoptionScoreThreshold = adoptionChartData ? (adoptionChartData.matchScoreThreshold || APP_MATCH_SCORE_THRESHOLD_RB) : APP_MATCH_SCORE_THRESHOLD_RB;
+  const maturityDays = 1; // Define here or get from a constant if needed elsewhere in HTML
 
-  let html = `
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <title>${VS_COMPANY_NAME_RB} AI Interview Recruiter Report</title>
-    <style>
-      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; margin: 0; }
-      .container { max-width: 850px; margin: 20px auto; padding: 25px; border: 1px solid #ccc; border-radius: 8px; background-color: #ffffff; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-      h1, h2, h3 { color: #333; }
-      h1 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 25px; font-size: 26px; color: #1a237e; }
-      h2 { margin-top: 30px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; }
-      .metric-block { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; } /* Adjusted margin */
-      .rate { color: #1976d2; }
-      .time { color: #ef6c00; }
-      .count { color: #424242; }
-      .percent-value { color: #0056b3; font-weight: normal; }
-      .note { font-size: 0.85em; color: #757575; margin-top: 15px; }
-      table.data-table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
-      table.centered-table { margin-left: auto; margin-right: auto; width: auto; max-width: 98%; }
-      th, td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; }
-      th { background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; font-size: 11px; }
-      tr:nth-child(even) { background-color: #fafafa; }
-      .breakdown-section { margin-top: 25px; background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;} /* Encapsulate breakdowns */
-      .section-title { font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee; }
-      /* KPI Box Styling */
-      .kpi-nested-table { width: 100%; height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; }
-      .kpi-nested-table td { border: none; vertical-align: middle; text-align: center; }
-      .kpi-header-cell { padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px; }
-      .kpi-value-cell { padding: 10px; font-size: 34px; font-weight: bold; height: 100%; }
-      .kpi-value-cell .unit { font-size: 16px; font-weight: normal; margin-left: 3px; }
-      /* Specific KPI Backgrounds/Value Colors */
-      .kpi-value-cell.invitations { background-color: #e8f5e9; color: #2e7d32; }
-      .kpi-nested-table.invitations .kpi-header-cell { background-color: #e8f5e9; }
-      .kpi-value-cell.completion { background-color: #e3f2fd; color: #1976d2; }
-      .kpi-nested-table.completion .kpi-header-cell { background-color: #e3f2fd; }
-      .kpi-value-cell.time { background-color: #fff3e0; color: #ef6c00; }
-      .kpi-nested-table.time .kpi-header-cell { background-color: #fff3e0; }
-      .kpi-value-cell.stars { background-color: #f3e5f5; color: #8e24aa; }
-      .kpi-nested-table.stars .kpi-header-cell { background-color: #f3e5f5; }
-      .top-kpi-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; margin-bottom: 25px; table-layout: fixed; }
-      .top-kpi-cell { width: 25%; vertical-align: top; padding: 0; }
-      /* Bold first column in breakdown tables */
-      .breakdown-section table.data-table tr td:first-child { font-weight: bold; text-align: left; }
-      /* Center align other breakdown table cells */
-      .breakdown-section table.data-table tr td:not(:first-child) { text-align: center; }
-      /* Additional styles for side-by-side layout */
-      .side-by-side-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; table-layout: fixed; margin-bottom: 15px; }
-      .side-by-side-cell { width: 50%; vertical-align: top; padding: 0; }
-      .side-by-side-cell .metric-block, .side-by-side-cell .breakdown-section { margin-top: 0; margin-bottom: 0; /* Remove extra margins when nested */ }
-      /* Style for Looker link */
-      .looker-link-button {
-        display: inline-block;
-        background-color: #4285F4; /* Google Blue */
-        color: #ffffff;
-        padding: 10px 20px;
-        text-align: center;
-        text-decoration: none;
-        border-radius: 4px;
-        font-size: 14px;
-        margin-top: 10px; /* Space above link */
-      }
-      .link-container { text-align: center; margin-top: 10px; } /* Center the link/button */
 
-      /* Bar chart styles - Added from Weekly Report */
-      .bar-chart-table { /* Container table for bars */
-        width: 100%;
-        margin: 15px 0;
-        border: 1px solid #ddd;
-        padding: 15px;
-        background-color: white;
-        border-radius: 5px;
-        box-sizing: border-box;
-        border-collapse: separate; /* Use separate for spacing */
-        border-spacing: 0 8px; /* Vertical spacing between rows */
-      }
-      .bar-chart-table td { /* Style cells within the chart table */
-         border: none; /* Remove default borders */
-         padding: 0; /* Reset padding */
-         vertical-align: middle; /* Align items vertically */
-         height: 24px; /* Match old bar height */
-         line-height: 24px; /* Explicit line height can help alignment */
-      }
-      .bar-label-cell { /* Cell containing the label text + percentage */
-        width: 220px; /* Fixed width */
-        padding-right: 10px; /* Space between label and graph */
-        text-align: left;
-        font-weight: bold; /* Keep label part bold */
-        font-size: 13px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        color: #222;
-        box-sizing: border-box; /* Include padding in width */
-      }
-      .bar-graph-cell { /* Cell containing ONLY the graph div */
-         width: auto; /* Takes remaining width */
-       }
-      .bar-graph { /* The div inside the graph cell */
-        width: 100%; /* Fill the container cell */
-        height: 100%; /* Fill the container cell height */
-        background-color: #f0f0f0; /* The background bar color */
-        border-radius: 3px;
-        position: relative; /* Still needed for fill positioning */
-        border: 1px solid #cccccc;
-        box-sizing: border-box;
-      }
-      .bar-fill {
-        height: 100%;
-        background-color: #4CAF50; /* Standard Green */
-        position: absolute; /* Keep absolute */
-        left: 0;
-        top: 0;
-        border-radius: 2px 0 0 2px; /* Rounded left edge */
-        min-width: 1px; /* Show even tiny fills */
-        box-sizing: border-box;
-      }
-      .legend { display: flex; justify-content: center; flex-wrap: wrap; margin-top: 15px; font-size: 12px; }
-      .legend-item { display: flex; align-items: center; margin: 2px 10px; }
-      .legend-color { width: 14px; height: 14px; margin-right: 5px; border: 1px solid #ccc; flex-shrink: 0; }
-      .legend-color.adopted { background-color: #4CAF50; } /* Using adopted class name */
-      .legend-color.not-adopted { background-color: #f0f0f0; } /* Using not-adopted class name */
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>${VS_COMPANY_NAME_RB} AI Interview Recruiter Report</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- No <style> block needed - all styles are inline -->
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; margin: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 850px;">
+    <tr>
+      <td align="center">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 20px auto; padding: 25px;">
+          <!-- Header -->
+          <tr>
+            <td style="padding-bottom: 15px; margin-bottom: 25px; border-bottom: 2px solid #eee;">
+              <h1 style="color: #1a237e; text-align: center; font-size: 26px; margin: 0;">AI Recruiter Adoption: Daily Summary</h1> <!-- <<< Renamed Header -->
+            </td>
+          </tr>
 
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h1>AI Recruiter Adoption: Recruiter Breakdown</h1>
+          <!-- Top KPI Boxes - Table Layout -->
+          <tr>
+            <td style="padding-top: 25px; padding-bottom: 10px;">
+              <table border="0" cellpadding="0" cellspacing="15" width="100%" style="border-collapse: separate; table-layout: fixed;">
+                <tr>
+                  <td width="25%" style="vertical-align: top; padding: 0;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #e8f5e9;">
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px;">✉️ AI Invitations Sent</td></tr>
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #2e7d32;">
+                          ${metrics.totalSent}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="25%" style="vertical-align: top; padding: 0;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #e3f2fd;">
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px;">✅ Completion Rate</td></tr>
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #1976d2;">
+                          ${metrics.kpiCompletionRateAdjusted}<span style="font-size: 16px; font-weight: normal; margin-left: 3px;">%</span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="25%" style="vertical-align: top; padding: 0;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #fff3e0;">
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px;">⏱️ Avg Time Sent to Completion*</td></tr>
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #ef6c00;">
+                          ${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span style="font-size: 16px; font-weight: normal; margin-left: 3px;">days</span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="25%" style="vertical-align: top; padding: 0;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #f3e5f5;">
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px;">⭐ Avg Match Stars (Completed)</td></tr>
+                      <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #8e24aa;">
+                          ${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <!-- New row for the footnote -->
+                <tr>
+                  <td colspan="4" style="text-align: center; padding-top: 5px; font-size: 10px; color: #666;">
+                    (Completion Rate KPI Excl. invites sent < ${maturityDays} day)
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
 
-      <!-- Top KPI Boxes - 1x4 Layout -->
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="top-kpi-table">
-        <tr>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table invitations">
-              <tr><td class="kpi-header-cell">✉️ AI Invitations Sent</td></tr>
-              <tr><td class="kpi-value-cell invitations">${metrics.totalSent}</td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table completion">
-              <tr><td class="kpi-header-cell">✅ Completion Rate</td></tr>
-              <tr><td class="kpi-value-cell completion">${metrics.completionRate}<span class="unit">%</span></td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table time">
-              <tr><td class="kpi-header-cell">⏱️ Avg Time Sent to Completion*</td></tr>
-              <tr><td class="kpi-value-cell time">${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span class="unit">days</span></td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table stars">
-              <tr><td class="kpi-header-cell">⭐ Avg Match Stars (Completed)</td></tr>
-              <tr><td class="kpi-value-cell stars">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</td></tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-
-      <!-- Side-by-side Sections -->
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="side-by-side-table">
-        <tr>
-          <td class="side-by-side-cell">
-            <!-- Interview Completion Status -->
-            <div class="metric-block">
-              <div class="section-title">📊 AI Screening Completion Status</div>
-              <table class="data-table centered-table">
-                 <thead><tr><th>Status</th><th>Count</th><th>%</th></tr></thead>
+          <!-- Side-by-side Sections - Table Layout -->
+          <tr>
+            <td style="padding-bottom: 15px;">
+              <table border="0" cellpadding="0" cellspacing="15" width="100%" style="border-collapse: separate; table-layout: fixed;">
+                <tr>
+                  <!-- Left Cell: Completion Status -->
+                  <td width="50%" style="vertical-align: top; padding: 0;">
+                    <div style="background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px;">
+                      <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📊 AI Screening Completion Status</div>
+                      <table align="center" border="0" cellpadding="0" cellspacing="0" width="95%" style="border-collapse: collapse; table-layout: fixed; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;"> <!-- Added table-layout: fixed -->
+                         <thead><tr><th style="width: 50%; border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Status</th><th style="width: 60px; border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Count</th><th style="width: 60px; border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">%</th></tr></thead> <!-- Restored Status Header & Added Widths -->
                  <tbody>
                  ${Object.entries(metrics.interviewStatusDistribution)
-                     .sort(([, dataA], [, dataB]) => dataB.count - dataA.count)
-                     .map(([status, data]) => `
-                         <tr>
-                             <td>${status}</td>
-                             <td>${data.count}</td>
-                             <td><span class="percent-value">${data.percentage}%</span></td>
-                         </tr>
-                     `).join('')}
+                             .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
+                             .map(([status, data], index) => `<tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};"> <!-- Removed title attribute -->
+                                 <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; word-wrap: break-word;">${status}</td> <!-- Restored Status Cell, Added word-wrap -->
+                                 <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.count}</td>
+                                 <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle; color: #0056b3;">${data.percentage}%</td>
+                             </tr>`).join('')}
                  </tbody>
              </table>
-             <p class="note">Percentage is based on the total number of invitations sent since 17th April 2025 (Launch of AIR).</p>
+                     <p style="font-size: 0.85em; color: #757575; margin-top: 15px;">Percentage is based on the total number of invitations sent since 17th April 2025 (Launch of AIR).</p>
             </div>
           </td>
-          <td class="side-by-side-cell">
-            <!-- Daily Invitations Sent -->
-            <div class="breakdown-section">
-              <div class="section-title">🗓️ Daily Invitations Sent</div>
-              ${generateTimeseriesTable(metrics.dailySentCounts).replace('<table class="data-table">', '<table class="data-table centered-table">')}
+                  <!-- Right Cell: Daily Invitations -->
+                  <td width="50%" style="vertical-align: top; padding: 0;">
+                     <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                       <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">🗓️ Daily Invitations Sent (Last 7 Days)</div>
+                       ${generateTimeseriesTable(metrics.dailySentCounts)}
             </div>
           </td>
         </tr>
       </table>
+            </td>
+          </tr>
 
-     <!-- <<< ADDED: Breakdown by Recruiter Section >>> -->
-     <div class="breakdown-section">
-         <div class="section-title">🧑‍💼 Breakdown by Recruiter</div>
-         <table class="data-table centered-table">
+          <!-- Breakdown by Recruiter (Table) -->
+          <tr>
+            <td style="padding-top: 10px; padding-bottom: 10px;">
+              <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+                 <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">🧑‍💼 Breakdown by Recruiter</div>
+                 <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
              <thead>
                 <tr>
-                   <th>Recruiter Name</th>
-                   <th>Sent</th>
-                   <th>Completed (# / %)</th>
-                   <th>Scheduled</th>
-                   <th>Pending (# / %)</th>
-                   <th>Feedback Submitted</th>
-                   <th>Recruiter Submission Awaited</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Name</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Sent</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Completed (# / %)</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Submission Awaited</th>
                  </tr>
              </thead>
              <tbody>
-                 ${Object.entries(metrics.byRecruiter)
-                     .sort(([recA], [recB]) => { // Sort, handling 'Unknown'
+                        ${(() => { // Start IIFE to contain logic
+                            // Sort recruiters by Sent descending, keeping Unknown last
+                            const sortedRecruiters = Object.entries(metrics.byRecruiter)
+                                .sort(([recA, dataA], [recB, dataB]) => {
                           if (recA === 'Unknown') return 1;
                           if (recB === 'Unknown') return -1;
-                          return recA.localeCompare(recB);
-                      })
-                     .map(([rec, data]) => `
-                         <tr>
-                             <td>${rec}</td>
-                             <td>${data.sent}</td>
-                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                             <td>${data.scheduled}</td>
-                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                             <td>${data.feedbackSubmitted}</td>
-                             <td>${data.recruiterSubmissionAwaited}</td>
-                         </tr>
-                     `).join('')}
-                 ${Object.keys(metrics.byRecruiter).length === 0 ? '<tr><td colspan="7" style="text-align:center;">No recruiter data found or Recruiter_name column missing.</td></tr>' : ''}
-             </tbody>
-         </table>
-         ${recruiterIdx === -1 ? '<p class="note">Recruiter breakdown is based on the "Recruiter_name" column, which was not found in the sheet.</p>' : ''}
-     </div>
+                                    return dataB.sent - dataA.sent;
+                                });
 
-     <!-- <<< Modified: Adoption Rate by Recruiter Bar Chart >>> -->
-     <div class="breakdown-section">
-         <div class="section-title">📊 AI Adoption Rate by Recruiter (Post-Launch, ≥${adoptionScoreThreshold} Match Score)</div>
-         ${!hasMatchStarsColumnForAdoption ?
-                '<div style="padding: 10px; color: #cc3300; text-align: center; font-size: 0.9em;"><b>Warning:</b> Match score column not found in Application sheet. Filter could not be applied.</div>' : ''}
-         <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="bar-chart-table">
-             <tbody>
-             ${hasAdoptionData ?
-                 adoptionChartData.recruiterAdoptionData // Use adoption data here
-                 .sort((a, b) => { // Sort alphabetically, handling 'Unassigned'
-                     if (a.recruiter === 'Unassigned') return 1;
-                     if (b.recruiter === 'Unassigned') return -1;
-                     return a.recruiter.localeCompare(b.recruiter);
-                 })
-                 .map(data => {
-                     const adoptionRate = data.adoptionRate || 0;
-                     const displayWidth = Math.max(adoptionRate, 0);
-                     const takenCount = data.takenAI || 0;
-                     const eligibleCount = data.totalCandidates || 0; // This is eligible count
-                     return `
-                     <tr>
-                       <td class="bar-label-cell" title="${data.recruiter} (${takenCount}/${eligibleCount})">
-                         ${data.recruiter} (${takenCount}/${eligibleCount})<span style="color: #CC5500; font-weight: bold;"> [${adoptionRate}%]</span>
-                       </td>
-                       <td class="bar-graph-cell">
-                         <div class="bar-graph">
-                           <div class="bar-fill" style="width: ${displayWidth}%;"></div>
-                         </div>
-                       </td>
-                     </tr>`;
-                 }).join('')
-                 :
-                 '<tr><td colspan="2" style="text-align:center; border: none; padding: 10px; color: #777;">No adoption data found or could not be calculated.</td></tr>'
-             }
+                            // Create a map for medals for the top 3 (excluding Unknown)
+                            const medals = ['🥇', '🥈', '🥉'];
+                            const recruiterMedalMap = {};
+                            sortedRecruiters
+                                .filter(([rec]) => rec !== 'Unknown')
+                                .slice(0, 3)
+                                .forEach(([rec], index) => {
+                                    recruiterMedalMap[rec] = medals[index];
+                                });
+
+                            // Generate table rows
+                            return sortedRecruiters
+                             .map(([rec, data], index) => {
+                                const medal = recruiterMedalMap[rec] || ''; // Get medal or empty string
+                                return `
+                                  <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                     <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${medal}${medal ? ' ' : ''}${rec}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
+                                  </tr>
+                                `;
+                            }).join('');
+                        })()}
+                          ${Object.keys(metrics.byRecruiter).length === 0 ? '<tr><td colspan="7" style="text-align:center; padding: 10px; border: 1px solid #e0e0e0; font-size: 12px;">No recruiter data found or Recruiter_name column missing.</td></tr>' : ''}
+                      </tbody>
+                  </table>
+                 ${recruiterIdx === -1 ? '<p style="font-size: 0.85em; color: #757575; margin-top: 15px;">Recruiter breakdown is based on the "Recruiter_name" column, which was not found in the sheet.</p>' : ''}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Recruiter Last Activity Table (Moved Up) -->
+          <tr>
+            <td style="padding-top: 10px; padding-bottom: 10px;">
+              <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+                <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">⏱️ Recruiter Last Invite Activity</div>
+                <table align="center" border="0" cellpadding="0" cellspacing="0" width="95%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
+                  <thead>
+                    <tr>
+                      <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Name</th>
+                      <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Last Invite Sent</th>
+                      <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; width: 250px;">Daily Trend (Last 10 Days)</th> <!-- Added Header -->
+                         </tr>
+                  </thead>
+                  <tbody>
+                    ${recruiterActivityData && recruiterActivityData.length > 0 ?
+                        recruiterActivityData.map((activity, index) => {
+                            const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
+                            const daysAgoText = activity.daysAgo === 0 ? 'Yesterday' : `${activity.daysAgo} calendar ${activity.daysAgo === 1 ? 'day' : 'days'} ago`;
+                            return `
+                            <tr style="background-color: ${bgColor};">
+                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${activity.recruiter}</td>
+                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${daysAgoText}</td>
+                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; font-family: monospace;">${activity.dailyTrend || 'N/A'}</td> <!-- Added Trend Column -->
+                            </tr>`;
+                        }).join('')
+                        :
+                        '<tr><td colspan="3" style="text-align:center; border: 1px solid #e0e0e0; padding: 10px; color: #777; font-size: 12px;">No recruiter activity data found or Recruiter_name column missing.</td></tr>' // Updated colspan
+                    }
              </tbody>
          </table>
-         <div class="legend">
-             <div class="legend-item"><div class="legend-color adopted"></div><div>Invited (Eligible)</div></div>
-             <div class="legend-item"><div class="legend-color not-adopted"></div><div>Not Invited (Eligible)</div></div>
-         </div>
-          <p class="note" style="font-size: 11px; text-align: center;">Adoption rate calculated as (Invited / Eligible). Eligible = Not Rejected and AI Interview is 'Y', 'N', or blank. Filtered for applications since ${APP_LAUNCH_DATE_RB.toLocaleDateString()}${hasMatchStarsColumnForAdoption ? ` and Match Score >= ${adoptionScoreThreshold}` : ' (Match Score filter not applied)'}.</p>
+                 ${recruiterNameIdx_Log === -1 ? '<p style="font-size: 0.85em; color: #757575; margin-top: 15px;">Recruiter activity based on the "Recruiter_name" column, which was not found in the log sheet.</p>' : ''}
      </div>
-     <!-- <<< End Adoption Rate Bar Chart >>> -->
+            </td>
+          </tr>
+
+          <!-- Adoption Rate by Recruiter Bar Chart -->
+          <tr>
+            <td style="padding-top: 10px; padding-bottom: 10px;">
+              <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+                <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📊 AI Adoption Rate by Recruiter (Post-Launch, ≥${adoptionScoreThreshold} Match Score)</div>
+                ${!hasMatchStarsColumnForAdoption ?
+                  '<div style="padding: 10px; color: #cc3300; text-align: center; font-size: 0.9em;"><b>Warning:</b> Match score column not found in Application sheet. Filter could not be applied.</div>' : ''}
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 15px 0; border: 1px solid #ddd; padding: 15px; background-color: white; border-radius: 5px; box-sizing: border-box; border-collapse: separate; border-spacing: 0 8px;">
+                   <tbody>
+                   ${hasAdoptionData ?
+                       adoptionChartData.recruiterAdoptionData
+                       .sort((a, b) => { if (a.recruiter === 'Unassigned') return 1; if (b.recruiter === 'Unassigned') return -1; return a.recruiter.localeCompare(b.recruiter); })
+                       .map(data => {
+                           const adoptionRate = data.adoptionRate || 0;
+                           const displayWidth = Math.max(adoptionRate, 0);
+                           const takenCount = data.takenAI || 0;
+                           const eligibleCount = data.totalCandidates || 0;
+                           return `
+                           <tr>
+                             <td style="width: 220px; padding-right: 10px; text-align: left; font-weight: bold; font-size: 13px; overflow: hidden; text-overflow: ellipsis; color: #222; box-sizing: border-box; border: none; padding: 0; vertical-align: middle; height: 24px; line-height: 24px;" title="${data.recruiter} (${takenCount}/${eligibleCount})">
+                               ${data.recruiter} (${takenCount}/${eligibleCount})<span style="color: #CC5500; font-weight: bold;"> [${adoptionRate}%]</span>
+                             </td>
+                             <td style="width: auto; border: none; padding: 0; vertical-align: middle; height: 24px; line-height: 24px;">
+                               <div style="width: 100%; height: 100%; background-color: #f0f0f0; border-radius: 3px; position: relative; border: 1px solid #cccccc; box-sizing: border-box;">
+                                 <div style="width: ${displayWidth}%; height: 100%; background-color: #4CAF50; border-radius: 3px;"></div>
+                               </div>
+                             </td>
+                           </tr>`;
+                       }).join('')
+                       :
+                       '<tr><td colspan="2" style="text-align:center; border: none; padding: 10px; color: #777;">No adoption data found or could not be calculated.</td></tr>'
+                   }
+                   </tbody>
+                </table>
+                <table border="0" cellpadding="0" cellspacing="10" align="center" style="margin-top: 15px; font-size: 12px;">
+                   <tr>
+                     <td style="vertical-align: middle;"><div style="width: 14px; height: 14px; border: 1px solid #ccc; background-color: #4CAF50;"></div></td>
+                     <td style="vertical-align: middle;">Invited (Eligible)</td>
+                     <td style="padding-left: 15px; vertical-align: middle;"><div style="width: 14px; height: 14px; border: 1px solid #ccc; background-color: #f0f0f0;"></div></td>
+                     <td style="vertical-align: middle;">Not Invited (Eligible)</td>
+                   </tr>
+                </table>
+                <p style="font-size: 11px; text-align: center; color: #757575; margin-top: 15px;">Adoption rate calculated as (Invited / Eligible). Eligible = Not Rejected and AI Interview is 'Y', 'N', or blank. Filtered for applications since ${APP_LAUNCH_DATE_RB.toLocaleDateString()}${hasMatchStarsColumnForAdoption ? ` and Match Score >= ${adoptionScoreThreshold}` : ' (Match Score filter not applied)'}.</p>
+              </div>
+            </td>
+          </tr>
 
      <!-- Looker Studio Link -->
-     <div class="link-container">
-       <a href="https://lookerstudio.google.com/u/0/reporting/b05c1dfb-d808-4eca-b70d-863fe5be0f27/page/p_58go7mgqrd" target="_blank" class="looker-link-button">
+          <tr>
+            <td style="text-align: center; padding-top: 10px; padding-bottom: 10px;">
+              <a href="https://lookerstudio.google.com/u/0/reporting/b05c1dfb-d808-4eca-b70d-863fe5be0f27/page/p_58go7mgqrd" target="_blank" style="display: inline-block; background-color: #4285F4; color: #ffffff; padding: 10px 20px; text-align: center; text-decoration: none; border-radius: 4px; font-size: 14px; margin-top: 10px;">
          View Detailed Looker Studio Report
        </a>
-     </div>
+            </td>
+          </tr>
 
      <!-- Breakdown by Job Function -->
-     <div class="breakdown-section">
-         <div class="section-title">💼 Breakdown by Job Function</div>
-         <table class="data-table centered-table">
+          <tr>
+             <td style="padding-top: 10px; padding-bottom: 10px;">
+               <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+                  <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">💼 Breakdown by Job Function</div>
+                  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
              <thead>
                 <tr>
-                   <th>Job Function</th>
-                   <th>Sent</th>
-                   <th>Completed (# / %)</th>
-                   <th>Scheduled</th>
-                   <th>Pending (# / %)</th>
-                   <th>Feedback Submitted</th>
-                   <th>Recruiter Submission Awaited</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Job Function</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Sent</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Completed (# / %)</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Submission Awaited</th>
                  </tr>
              </thead>
              <tbody>
                  ${Object.entries(metrics.byJobFunction)
                      .sort(([funcA], [funcB]) => funcA.localeCompare(funcB))
-                     .map(([func, data]) => `
-                         <tr>
-                             <td>${func}</td>
-                             <td>${data.sent}</td>
-                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                             <td>${data.scheduled}</td>
-                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                             <td>${data.feedbackSubmitted}</td>
-                             <td>${data.recruiterSubmissionAwaited}</td>
+                              .map(([func, data], index) => `
+                                  <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${func}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
                          </tr>
                      `).join('')}
              </tbody>
          </table>
      </div>
+             </td>
+          </tr>
 
      <!-- Breakdown by Location Country -->
-     <div class="breakdown-section">
-         <div class="section-title">🌍 Breakdown by Location Country</div>
-          <table class="data-table centered-table">
+           <tr>
+             <td style="padding-top: 10px; padding-bottom: 10px;">
+               <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+                  <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">🌍 Breakdown by Location Country</div>
+                   <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
              <thead>
                 <tr>
-                   <th>Country</th>
-                   <th>Sent</th>
-                   <th>Completed (# / %)</th>
-                   <th>Scheduled</th>
-                   <th>Pending (# / %)</th>
-                   <th>Feedback Submitted</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Country</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Sent</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Completed (# / %)</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
                  </tr>
              </thead>
              <tbody>
                  ${Object.entries(metrics.byCountry)
                      .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB))
-                     .map(([ctry, data]) => `
-                         <tr>
-                             <td>${ctry}</td>
-                             <td>${data.sent}</td>
-                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                             <td>${data.scheduled}</td>
-                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                             <td>${data.feedbackSubmitted}</td>
+                              .map(([ctry, data], index) => `
+                                  <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${ctry}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
                          </tr>
                      `).join('')}
              </tbody>
          </table>
      </div>
+             </td>
+          </tr>
 
-     <p class="note" style="text-align: center; margin-top: 30px;">
-       *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
-       Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
-     </p>
-   </div>
- </body>
- </html>
- `;
- // Add reference to recruiterIdx for conditional note
- return html.replace(
-     '</body>', // Find the closing body tag
-     `${recruiterIdx === -1 ? '<p class="note" style="text-align:center; color: red;">Warning: "Recruiter_name" column not found in the sheet. Recruiter breakdown data will be limited or inaccurate.</p>' : ''}
-      </body>` // Inject the warning if needed
- );
+          <!-- Footer Note -->
+          <tr>
+            <td style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+              <p style="font-size: 0.85em; color: #757575; margin: 0;">
+                *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
+                **Completion Rate KPI** excludes invitations sent within the last 48 hours. Breakdown table % includes all sent invites.<br>
+                Overall completion rate (including all invites): ${metrics.completionRateOriginal}%.<br>
+                Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
+              </p>
+              ${recruiterIdx === -1 ? '<p style="font-size: 0.85em; color: red; margin-top: 5px;">Warning: "Recruiter_name" column not found in the sheet. Recruiter breakdown data will be limited or inaccurate.</p>' : ''}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return html;
 }
 
 
@@ -1260,12 +1430,12 @@ ${stackTrace}
 function setupRecruiterBreakdownMenu() {
   try {
     SpreadsheetApp.getUi()
-      .createMenu(`${VS_COMPANY_NAME_RB} AI Recruiter Report`) // Menu Name
-      .addItem('Generate & Send Recruiter Report Now', 'AIR_RecruiterBreakdown_Daily') // Updated Item Text & Function
-      .addItem('Schedule Weekly Recruiter Report', 'createRecruiterBreakdownTrigger') // Updated Item Text & Function
+      .createMenu(`${VS_COMPANY_NAME_RB} AI Daily Summary`) // Menu Name Updated
+      .addItem('Generate & Send Summary Now', 'AIR_DailySummarytoAP') // Updated Item Text & Function Name
+      .addItem('Schedule Daily Summary (10 AM)', 'createRecruiterBreakdownTrigger') // Updated Item Text
       .addToUi();
   } catch (e) {
-    Logger.log("Error creating Recruiter Breakdown menu (might happen if not opened from a Sheet): " + e);
+    Logger.log("Error creating Daily Summary menu (might happen if not opened from a Sheet): " + e); // Updated log
   }
 }
 

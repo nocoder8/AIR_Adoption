@@ -1,4 +1,6 @@
 // AIR Volkscience - Exec Summary - Company-Level AI Interview Analytics Script v1.0
+// To: Akhila and Pavan
+// When: Weekly, Monday at 8 AM
 // This script analyzes data from the Log_Enhanced sheet to provide company-wide insights
 // into the AI interview process funnel, timelines, and outcomes.
 
@@ -21,24 +23,24 @@ function createVolkscienceTrigger() {
   // Delete existing triggers for this function to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'generateAndSendVolkscienceReport') {
+    if (triggers[i].getHandlerFunction() === 'AIR_ExecSummary_Daily') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
   // Create a new trigger to run weekly (e.g., Monday at 8 AM)
-  ScriptApp.newTrigger('generateAndSendVolkscienceReport')
+  ScriptApp.newTrigger('AIR_ExecSummary_Daily')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(8)
+    .atHour(10)
     .create();
-  Logger.log(`Weekly trigger created for generateAndSendVolkscienceReport (Monday 8 AM)`);
-  SpreadsheetApp.getUi().alert(`Weekly trigger created for ${VS_COMPANY_NAME} AI Interview Report (Monday 8 AM).`);
+  Logger.log(`Weekly trigger created for AIR_ExecSummary_Daily (Monday 10 AM)`);
+  SpreadsheetApp.getUi().alert(`Weekly trigger created for ${VS_COMPANY_NAME} AI Interview Report (Monday 10 AM).`);
 }
 
 /**
  * Main function to generate and send the company-level AI interview report.
  */
-function generateAndSendVolkscienceReport() {
+function AIR_ExecSummary_Daily() {
   try {
     Logger.log(`--- Starting ${VS_COMPANY_NAME} AI Interview Report Generation ---`);
 
@@ -140,7 +142,7 @@ function generateAndSendVolkscienceReport() {
     return `Report sent to ${VS_EMAIL_RECIPIENT}`;
 
   } catch (error) {
-    Logger.log(`Error in generateAndSendVolkscienceReport: ${error.toString()} Stack: ${error.stack}`);
+    Logger.log(`Error in AIR_ExecSummary_Daily: ${error.toString()} Stack: ${error.stack}`);
     // Send error email
     sendVsErrorNotification(`ERROR generating AI Recruiter Adoption: Executive Summary: ${error.toString()}`, error.stack);
     return `Error: ${error.toString()}`;
@@ -223,7 +225,7 @@ function getLogSheetData() {
   const missingCols = [];
 
   // --- Find Status Column --- Enforce Interview Status_Real ---
-  const statusColName = 'Interview Status_Real';
+  const statusColName = 'Interview_status_real';
   const statusColIndex = headers.indexOf(statusColName);
   if (statusColIndex !== -1) {
       colIndices['STATUS_COLUMN'] = statusColIndex;
@@ -817,7 +819,7 @@ function setupVolkscienceMenu() {
   try {
     SpreadsheetApp.getUi()
       .createMenu(`${VS_COMPANY_NAME} AI Report`)
-      .addItem('Generate & Send Report Now', 'generateAndSendVolkscienceReport')
+      .addItem('Generate & Send Report Now', 'AIR_ExecSummary_Daily')
       .addItem('Schedule Weekly Report', 'createVolkscienceTrigger')
       .addToUi();
   } catch (e) {

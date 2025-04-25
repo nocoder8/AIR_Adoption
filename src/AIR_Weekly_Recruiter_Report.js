@@ -3,13 +3,7 @@
  * AI Interview Report Generator - Google Apps Script version : Gemini 2.17 - % Inline with Name
  * * This script analyzes candidate data in a Google Sheet to generate insights about AI interview adoption,
  * focusing on segmenting candidates by application date relative to the AI Recruiter launch date.
- * * To use:
- * 1. Open your Google Sheet with candidate data
- * 2. Go to Extensions > Apps Script
- * 3. DELETE ALL existing code in the editor
- * 4. Copy and paste ALL of this code below
- * 5. Update the EMAIL_RECIPIENT constant if needed
- * 6. Save and run the script
+
  */
 
 // Configuration - Update these values
@@ -32,20 +26,20 @@ function createDailyTrigger() {
   // Delete any existing triggers
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'generateAndSendAIReport') {
+    if (triggers[i].getHandlerFunction() === 'generateAndSendAIReport') { // Reverted function name
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
 
   // Create a new trigger to run daily at 8 AM (Script's timezone)
-  ScriptApp.newTrigger('generateAndSendAIReport')
+  ScriptApp.newTrigger('generateAndSendAIReport') // Reverted function name
     .timeBased()
     .atHour(8)
     .everyDays(1)
     .create();
 
   Logger.log('Daily trigger set to run at 8 AM');
-  SpreadsheetApp.getUi().alert('Daily trigger set to run generateAndSendAIReport function at 8 AM.'); // User feedback
+  SpreadsheetApp.getUi().alert('Daily trigger set to run generateAndSendAIReport function at 8 AM.'); // Reverted User feedback
 }
 
 /**
@@ -1184,7 +1178,7 @@ function onOpen() {
   try {
       SpreadsheetApp.getUi()
           .createMenu('AI Interview Report')
-          .addItem('Generate & Send Report Now', 'generateAndSendAIReport')
+          .addItem('Generate & Send Report Now', 'generateAndSendAIReport') // Reverted function name
           .addItem('Schedule Daily Report (8 AM)', 'createDailyTrigger')
           .addSeparator()
           .addItem('Log Sheet Headers (Debug)', 'logSheetHeaders')

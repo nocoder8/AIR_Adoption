@@ -1,8 +1,11 @@
 // Recruiter Alerts for AI Recommendations - AIR Script v1.0
-// This script checks the Log_Enhanced sheet daily for completed AI interviews
+// To: Recruiters
+// When: Tuesdays thru Fridays, around 1 PM
+// What: Checks the Log_Enhanced sheet for completed AI interviews
 // where feedback is AI_RECOMMENDED and hasn't been reviewed promptly ( > 1 day ago),
 // and sends a consolidated alert email to the relevant recruiter.
-
+// Also sends an Admin Digest email to pkumar@eightfold.ai on Tuesdays thru Fridays, around 1 PM
+// containing all pending items from the Log_Enhanced sheet.
 // --- Configuration ---
 // Use the same Log Enhanced sheet URL as the other scripts
 const ALERT_LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -35,13 +38,13 @@ function createAlertTrigger() {
   // Delete existing triggers for this function to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'sendRecruiterAlerts') {
+    if (triggers[i].getHandlerFunction() === 'sendRecruiterAlertsForFeedbackSubmission') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
-  // Create new triggers to run weekdays (e.g., around 9 AM)
+  // Create new triggers to run weekdays (e.g., around 1 PM)
   const daysOfWeek = [
-      ScriptApp.WeekDay.MONDAY,
+      // ScriptApp.WeekDay.MONDAY, // Removed Monday
       ScriptApp.WeekDay.TUESDAY,
       ScriptApp.WeekDay.WEDNESDAY,
       ScriptApp.WeekDay.THURSDAY,
@@ -49,17 +52,17 @@ function createAlertTrigger() {
   ];
 
   daysOfWeek.forEach(day => {
-      ScriptApp.newTrigger('sendRecruiterAlerts')
+      ScriptApp.newTrigger('sendRecruiterAlertsForFeedbackSubmission')
           .timeBased()
           .onWeekDay(day)
-          .atHour(9).nearMinute(0) // Run around 9 AM
+          .atHour(13).nearMinute(0) // Run around 1 PM
           .create();
   });
 
-  Logger.log(`Weekday triggers created for sendRecruiterAlerts (around 9 AM)`);
+  Logger.log(`Weekday triggers created for sendRecruiterAlertsForFeedbackSubmission (around 1 PM)`);
   try {
     // Try to show alert, may fail if run from script editor directly
-    SpreadsheetApp.getUi().alert(`Weekday triggers created for Recruiter Alerts (around 9 AM).`);
+    SpreadsheetApp.getUi().alert(`Weekday triggers created for Recruiter Alerts (Tuesday-Friday, around 1 PM).`);
   } catch (uiError) {
     Logger.log('Could not display UI alert for trigger creation.');
   }
@@ -68,7 +71,7 @@ function createAlertTrigger() {
 /**
  * Main function to identify candidates needing review and send alerts.
  */
-function sendRecruiterAlerts() {
+function sendRecruiterAlertsForFeedbackSubmission() {
   Logger.log(`--- Starting Recruiter Alert Check ---`);
   try {
     // 1. Get Log Sheet Data
@@ -151,8 +154,14 @@ function sendRecruiterAlerts() {
           // MailApp.sendEmail(testRecipient, testSubject, "", { htmlBody: htmlBody, noReply: true });
           // Logger.log(`TEST: Sent alert intended for ${recruiterEmail} to ${testRecipient} for ${candidatesForRecruiter.length} candidate(s).`);
           // --- Restore original sending logic ---
-          MailApp.sendEmail(recruiterEmail, subject, "", { htmlBody: htmlBody, noReply: true });
-          Logger.log(`Sent alert email to ${recruiterEmail} for ${candidatesForRecruiter.length} candidate(s).`);
+          // MailApp.sendEmail(recruiterEmail, subject, "", { htmlBody: htmlBody, noReply: true });
+          // Add CC to the admin/requester
+          MailApp.sendEmail(recruiterEmail, subject, "", { 
+              htmlBody: htmlBody, 
+              noReply: true,
+              cc: ALERT_ADMIN_EMAIL // CC the admin email
+          });
+          Logger.log(`Sent alert email to ${recruiterEmail} (CC: ${ALERT_ADMIN_EMAIL}) for ${candidatesForRecruiter.length} candidate(s).`);
           // --- End Restoration ---
           emailsSent++;
         } catch (emailError) {
@@ -182,7 +191,7 @@ function sendRecruiterAlerts() {
     Logger.log(`--- Finished Recruiter Alert Check (${emailsSent} Emails Sent) ---`);
 
   } catch (error) {
-    Logger.log(`ERROR in sendRecruiterAlerts: ${error.toString()} Stack: ${error.stack}`);
+    Logger.log(`ERROR in sendRecruiterAlertsForFeedbackSubmission: ${error.toString()} Stack: ${error.stack}`);
     // Optional: Send error notification to admin
      sendAlertErrorNotification(`ERROR in Recruiter Alert Script Execution: ${error.toString()}`, error.stack);
   }
@@ -753,7 +762,7 @@ function onOpen() {
   try {
     SpreadsheetApp.getUi()
       .createMenu('Recruiter Alerts (AIR)')
-      .addItem('Run Alert Check Now', 'sendRecruiterAlerts')
+      .addItem('Run Alert Check Now', 'sendRecruiterAlertsForFeedbackSubmission')
       .addItem('Setup/Reset Daily Trigger', 'createAlertTrigger')
       .addToUi();
   } catch (e) {
