@@ -392,16 +392,18 @@ function filterCandidatesForAlert(deduplicatedRows, colIndices) {
   const statusIdx = colIndices['STATUS_COLUMN'];
   const feedbackStatusIdx = colIndices['Feedback_status'];
   const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
+  const candidateNameIdx = colIndices['Candidate_name']; // Get candidate name index
 
   return deduplicatedRows.filter(row => {
     // Ensure all required columns exist in the row
-    if (!row || row.length <= statusIdx || row.length <= feedbackStatusIdx || row.length <= timeSinceIdx) {
+    if (!row || row.length <= statusIdx || row.length <= feedbackStatusIdx || row.length <= timeSinceIdx || row.length <= candidateNameIdx) {
        return false;
     }
 
     const status = String(row[statusIdx] || '').trim();
     const feedbackStatus = String(row[feedbackStatusIdx] || '').trim();
     const timeSince = parseFloat(row[timeSinceIdx]); // Parse the number of days
+    const candidateName = String(row[candidateNameIdx] || '').trim();
 
     const meetsCriteria =
       status === ALERT_STATUS_COMPLETED &&
@@ -409,10 +411,16 @@ function filterCandidatesForAlert(deduplicatedRows, colIndices) {
       !isNaN(timeSince) && timeSince > ALERT_DAYS_THRESHOLD &&
       timeSince <= ALERT_STOP_DAYS_THRESHOLD; // Stop alerting after 7 days
 
-     // Log details for rows meeting criteria (optional)
-     // if (meetsCriteria) {
-     //    Logger.log(`Candidate meeting criteria: Profile=${row[colIndices['Profile_id']]}, Position=${row[colIndices['Position_id']]}, Status=${status}, Feedback=${feedbackStatus}, Days=${timeSince}`);
-     // }
+    // <<< ADDED: Exclude specific candidate >>>
+    if (meetsCriteria && candidateName.toLowerCase() === 'erica thomas') {
+        Logger.log(`Excluding candidate 'Erica Thomas' from alerts.`);
+        return false; // Exclude this candidate
+    }
+
+    // Log details for rows meeting criteria (optional)
+    // if (meetsCriteria) {
+    //    Logger.log(`Candidate meeting criteria: Profile=${row[colIndices['Profile_id']]}, Position=${row[colIndices['Position_id']]}, Status=${status}, Feedback=${feedbackStatus}, Days=${timeSince}`);
+    // }
 
     return meetsCriteria;
   });

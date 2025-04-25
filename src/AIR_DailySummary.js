@@ -5,7 +5,7 @@
 // including a breakdown by recruiter.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT_RB = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT_RB = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC_RB = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL_RB = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -720,16 +720,17 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
     metrics.byRecruiter[recruiter].statusCounts[statusRaw] = (metrics.byRecruiter[recruiter].statusCounts[statusRaw] || 0) + 1; // <<< INCREMENT Recruiter Status Count
 
     // --- Calculate Avg Time Sent to Completion (Scheduled) ---
-    // (No change needed here)
-    if (STATUSES_FOR_AVG_TIME_CALC.includes(statusRaw)) {
+    // <<< UPDATED: Only calculate for strictly COMPLETED interviews >>>
+    if (statusRaw === 'COMPLETED') {
         const candidateName = (candidateNameIdx !== -1 && row[candidateNameIdx]) ? row[candidateNameIdx] : 'Unknown Candidate';
         const scheduleDateForAvg = (scheduledAtIdx !== -1) ? vsParseDateSafeRB(row[scheduledAtIdx]) : null; // Use RB helper
         if (sentDate && scheduleDateForAvg) {
-            const daysDiff = vsCalculateDaysDifferenceRB(sentDate, scheduleDateForAvg); // Use RB helper
+            const daysDiff = vsCalculateDaysDifferenceRB(sentDate, scheduleDateForAvg);
             if (daysDiff !== null) {
                 metrics.sentToScheduledDaysSum += daysDiff;
                 metrics.sentToScheduledCount++;
-                // Logger.log(`DEBUG_AVG_TIME: Candidate=${candidateName}, Status=${statusRaw}, Sent=${sentDate.toISOString()}, Scheduled=${scheduleDateForAvg.toISOString()}, DiffDays=${daysDiff.toFixed(8)}`);
+                // <<< ADDED: Detailed log for avg time calculation >>>
+                Logger.log(`AvgTimeCalc_Include: Candidate=[${candidateName}], Status=[${statusRaw}], Sent=[${sentDate.toISOString()}], Scheduled=[${scheduleDateForAvg.toISOString()}], DiffDays=[${daysDiff.toFixed(2)}]`);
             }
         }
     }
@@ -839,6 +840,11 @@ function calculateCompanyMetricsRB(filteredRows, colIndices) {
          metrics.avgCompletedToFeedbackDays = null; // Example, if calculation added later
     }
 
+    // <<< ADDED: Summary log before calculating average time >>>
+    Logger.log(`AvgTimeCalc_Summary: Total Days Sum = ${metrics.sentToScheduledDaysSum.toFixed(2)}, Count = ${metrics.sentToScheduledCount}`);
+    // <<< END ADDED >>>
+
+    // <<< DEBUG LOGGING for KPI Rate >>>
     // <<< DEBUG LOGGING for KPI Rate >>>
     Logger.log(`KPI Rate Calculation: Mature Sent (Denominator) = ${metrics.matureKpiTotalSent}`);
     Logger.log(`KPI Rate Calculation: Mature Completed [Strict 'COMPLETED'] (Numerator) = ${metrics.matureKpiTotalCompleted}`);
@@ -927,13 +933,18 @@ function generateRecruiterTableRowsHtml(recruiterData) {
             const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
             return `
                 <tr style="background-color: ${bgColor};">
-                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${medal}${medal ? ' ' : ''}${rec}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold; width: 180px;">${medal}${medal ? ' ' : ''}${rec}</td>
                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
-                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
+                    <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">
+                      ${data.recruiterSubmissionAwaited > 0 ? 
+                          `<span style="color: red; font-weight: bold;">${data.recruiterSubmissionAwaited}</span>` : 
+                          data.recruiterSubmissionAwaited
+                      }
+                    </td>
                 </tr>
             `;
         }).join('');
@@ -987,7 +998,6 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
   const hasAdoptionData = adoptionChartData && adoptionChartData.recruiterAdoptionData && adoptionChartData.recruiterAdoptionData.length > 0;
   const hasMatchStarsColumnForAdoption = adoptionChartData && adoptionChartData.hasMatchStarsColumn;
   const adoptionScoreThreshold = adoptionChartData ? (adoptionChartData.matchScoreThreshold || APP_MATCH_SCORE_THRESHOLD_RB) : APP_MATCH_SCORE_THRESHOLD_RB;
-  const maturityDays = 1; // Define here or get from a constant if needed elsewhere in HTML
 
 
   let html = `<!DOCTYPE html>
@@ -1032,6 +1042,12 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                         </td>
                       </tr>
                     </table>
+                    <div style="text-align: center; font-size: 10px; color: #666; margin-top: 3px;">
+                      (Excl. invites sent < 48 hours)
+                    </div>
+                    <div style="text-align: center; font-size: 10px; color: #666; margin-top: 1px;">
+                      Overall Completion rate: ${metrics.completionRateOriginal}%
+                    </div>
                   </td>
                   <td width="25%" style="vertical-align: top; padding: 0;">
                     <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #fff3e0;">
@@ -1050,12 +1066,6 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                         </td>
                       </tr>
                     </table>
-                  </td>
-                </tr>
-                <!-- New row for the footnote -->
-                <tr>
-                  <td colspan="4" style="text-align: center; padding-top: 5px; font-size: 10px; color: #666;">
-                    (Completion Rate KPI Excl. invites sent < ${maturityDays} day)
                   </td>
                 </tr>
               </table>
@@ -1106,13 +1116,13 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
              <thead>
                 <tr>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Name</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Sent</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Completed (# / %)</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
-                           <th style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Submission Awaited</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; width: 180px;">Recruiter Name</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Sent</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Completed (# / %)</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
+                           <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Submission Awaited</th>
                  </tr>
              </thead>
              <tbody>
@@ -1141,13 +1151,18 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                                 const medal = recruiterMedalMap[rec] || ''; // Get medal or empty string
                                 return `
                                   <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
-                                     <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${medal}${medal ? ' ' : ''}${rec}</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 3px 8px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
+                                     <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold; width: 180px;">${medal}${medal ? ' ' : ''}${rec}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.sent}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.completedNumber} (<span style="color: #0056b3;">${data.completedPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">
+                                        ${data.recruiterSubmissionAwaited > 0 ? 
+                                            `<span style="color: red; font-weight: bold;">${data.recruiterSubmissionAwaited}</span>` : 
+                                            data.recruiterSubmissionAwaited
+                                        }
+                                      </td>
                                   </tr>
                                 `;
                             }).join('');
@@ -1177,13 +1192,24 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                     ${recruiterActivityData && recruiterActivityData.length > 0 ?
                         recruiterActivityData.map((activity, index) => {
                             const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
-                            const daysAgoText = activity.daysAgo === 0 ? 'Yesterday' : `${activity.daysAgo} calendar ${activity.daysAgo === 1 ? 'day' : 'days'} ago`;
-                            return `
-                            <tr style="background-color: ${bgColor};">
-                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${activity.recruiter}</td>
-                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${daysAgoText}</td>
-                              <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; font-family: monospace;">${activity.dailyTrend || 'N/A'}</td> <!-- Added Trend Column -->
-                            </tr>`;
+                            let daysAgoText = '';
+                            if (activity.daysAgo === -1) {
+                                daysAgoText = 'Today';
+                            } else if (activity.daysAgo === 0) {
+                                daysAgoText = 'Yesterday';
+                            } else if (activity.daysAgo >= 1) {
+                                const actualDays = activity.daysAgo + 1; // Adjust because floor(today-yesterday) is 0
+                                daysAgoText = `${actualDays} calendar ${actualDays === 1 ? 'day' : 'days'} ago`;
+                            } else {
+                                daysAgoText = 'Unknown'; // Should not happen
+                            }
+
+                              return `
+                              <tr style="background-color: ${bgColor};">
+                                <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle; font-weight: bold;">${activity.recruiter}</td>
+                                <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${daysAgoText}</td>
+                                <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; font-family: monospace;">${activity.dailyTrend || 'N/A'}</td> <!-- Added Trend Column -->
+                              </tr>`;
                         }).join('')
                         :
                         '<tr><td colspan="3" style="text-align:center; border: 1px solid #e0e0e0; padding: 10px; color: #777; font-size: 12px;">No recruiter activity data found or Recruiter_name column missing.</td></tr>' // Updated colspan
@@ -1279,7 +1305,12 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
-                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.recruiterSubmissionAwaited}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">
+                                        ${data.recruiterSubmissionAwaited > 0 ? 
+                                            `<span style="color: red; font-weight: bold;">${data.recruiterSubmissionAwaited}</span>` : 
+                                            data.recruiterSubmissionAwaited
+                                        }
+                                      </td>
                          </tr>
                      `).join('')}
              </tbody>
@@ -1302,6 +1333,7 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                             <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Scheduled</th>
                             <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Pending (# / %)</th>
                             <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Feedback Submitted</th>
+                            <th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">Recruiter Submission Awaited</th>
                  </tr>
              </thead>
              <tbody>
@@ -1315,6 +1347,12 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.scheduled}</td>
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.pendingNumber} (<span style="color: #0056b3;">${data.pendingPercentOfSent}%</span>)</td>
                                       <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${data.feedbackSubmitted}</td>
+                                      <td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">
+                                        ${data.recruiterSubmissionAwaited > 0 ? 
+                                            `<span style="color: red; font-weight: bold;">${data.recruiterSubmissionAwaited}</span>` : 
+                                            data.recruiterSubmissionAwaited
+                                        }
+                                      </td>
                          </tr>
                      `).join('')}
              </tbody>
@@ -1323,16 +1361,13 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
              </td>
           </tr>
 
-          <!-- Footer Note -->
+          <!-- New row for the footnote under KPIs -->
           <tr>
-            <td style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
-              <p style="font-size: 0.85em; color: #757575; margin: 0;">
-                *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
-                **Completion Rate KPI** excludes invitations sent within the last 48 hours. Breakdown table % includes all sent invites.<br>
-                Overall completion rate (including all invites): ${metrics.completionRateOriginal}%.<br>
-                Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
-              </p>
-              ${recruiterIdx === -1 ? '<p style="font-size: 0.85em; color: red; margin-top: 5px;">Warning: "Recruiter_name" column not found in the sheet. Recruiter breakdown data will be limited or inaccurate.</p>' : ''}
+            <td colspan="4" style="text-align: center; padding-top: 5px; font-size: 10px; color: #666;">
+              *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
+              **Completion Rate KPI** excludes invitations sent within the last 48 hours. Breakdown table % includes all sent invites.<br>
+              Overall completion rate (including all invites): ${metrics.completionRateOriginal}%.<br>
+              Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
             </td>
           </tr>
         </table>
