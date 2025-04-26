@@ -1,7 +1,0 @@
-=IF(N2="CONFIRMED", 
-    IF(M2>NOW(), "SCHEDULED", 
-        IF(OR(S2="SUBMITTED", S2="AI_RECOMMENDED"), "COMPLETED", 
-            IF(S2="REQUESTED", "Candidate no-show", N2)
-        )
-    ), 
-    N2)

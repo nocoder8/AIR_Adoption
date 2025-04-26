@@ -7,7 +7,7 @@
  */
 
 // Configuration - Update these values
-const EMAIL_RECIPIENT = 'akashyap@eightfold.ai';
+const EMAIL_RECIPIENT = 'pkumar@eightfold.ai';
 const EMAIL_CC = 'pkumar@eightfold.ai';
 const SHEET_NAME = 'Active+Rejected'; // Sheet name corrected
 const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1g-Sp4_Ic91eXT9LeVwDJjRiMa5Xqf4Oks3aV29fxXRw/edit?gid=1957093905#gid=1957093905';
