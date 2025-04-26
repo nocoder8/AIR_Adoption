@@ -5,7 +5,7 @@
 // including a breakdown by recruiter.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT_RB = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT_RB = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC_RB = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL_RB = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -1263,7 +1263,10 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                      <td style="vertical-align: middle;">Not Invited (Eligible)</td>
                    </tr>
                 </table>
-                <p style="font-size: 11px; text-align: center; color: #757575; margin-top: 15px;">Adoption rate calculated as (Invited / Eligible). Eligible = Not Rejected and AI Interview is 'Y', 'N', or blank. Filtered for applications since ${APP_LAUNCH_DATE_RB.toLocaleDateString()}${hasMatchStarsColumnForAdoption ? ` and Match Score >= ${adoptionScoreThreshold}` : ' (Match Score filter not applied)'}.</p>
+                <p style="font-size: 11px; text-align: center; color: #757575; margin-top: 15px;">
+                    <a href="https://docs.google.com/document/d/1QWUn3G7VWrvfJY2rAk0pyCd0u2FtNKmxUCVc9ZQTm_w/edit?usp=sharing" target="_blank">How the adoption rate is calculated</a>.<br>
+                    Filtered for applications since ${APP_LAUNCH_DATE_RB.toLocaleDateString()}${hasMatchStarsColumnForAdoption ? ` and Match Score >= ${adoptionScoreThreshold}` : ' (Match Score filter not applied)'}.
+                </p>
               </div>
             </td>
           </tr>
