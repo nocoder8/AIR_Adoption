@@ -5,7 +5,7 @@
 // including a breakdown by recruiter.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT_RB = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT_RB = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC_RB = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL_RB = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
