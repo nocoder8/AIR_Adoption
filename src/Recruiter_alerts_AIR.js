@@ -269,7 +269,7 @@ function getLogDataForAlerts() {
   const missingCols = [];
 
   // --- Determine Status Column to Use ---
-  const preferredStatusCol = 'Interview Status_Real';
+  const preferredStatusCol = 'Interview_status_real';
   const fallbackStatusCol = 'interview_status'; // From SQL alias
   let statusColIdx = headers.indexOf(preferredStatusCol);
   let statusColNameUsed = preferredStatusCol;
