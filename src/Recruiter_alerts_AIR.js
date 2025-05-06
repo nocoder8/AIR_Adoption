@@ -24,7 +24,7 @@ const ALERT_STATUS_COMPLETED = 'COMPLETED';
 const ALERT_FEEDBACK_AI_RECOMMENDED = 'AI_RECOMMENDED';
 const ALERT_DAYS_THRESHOLD = 1; // Alert if Time_since > 1 day
 const ALERT_URGENT_DAYS_THRESHOLD = 3; // Highlight urgency if Time_since > 3 days
-const ALERT_STOP_DAYS_THRESHOLD = 7;   // Stop alerting if Time_since > 7 days
+const ALERT_STOP_DAYS_THRESHOLD = 15;   // Stop alerting if Time_since > 15 days
 
 // Admin Email for Digest
 const ALERT_ADMIN_EMAIL = 'pkumar@eightfold.ai'; // <<< VERIFY ADMIN EMAIL
@@ -147,27 +147,29 @@ function sendRecruiterAlertsForFeedbackSubmission() {
         try {
           // Pass the new counts to the HTML function
           const htmlBody = createAlertEmailHtml(recruiterEmail, candidatesForRecruiter, logData.colIndices, newHighMatchCount, pendingNudgeCount);
-          const subject = "Urgent: Review AI Screening Feedback";
+          const subject = "Urgent: Review AI Screening Feedback"; // Restore original subject
+          
+          // --- TEMPORARY TESTING MODIFICATION REMOVED ---
+          // const testRecipient = 'pkumar@eightfold.ai'; // Override recipient for testing
+          // const testSubject = `[TEST For ${recruiterEmail}] ${originalSubject}`; // Add original recipient to subject
+          // --- END TEMPORARY TESTING MODIFICATION ---
+
           // --- TESTING Block Removed ---
-          // const testRecipient = 'pkumar@eightfold.ai';
-          // const testSubject = `[TEST Alert For ${recruiterEmail}] Urgent: Review AI Screening Feedback`;
-          // MailApp.sendEmail(testRecipient, testSubject, "", { htmlBody: htmlBody, noReply: true });
-          // Logger.log(`TEST: Sent alert intended for ${recruiterEmail} to ${testRecipient} for ${candidatesForRecruiter.length} candidate(s).`);
+          // ... (remains removed)
+
           // --- Restore original sending logic ---
-          // MailApp.sendEmail(recruiterEmail, subject, "", { htmlBody: htmlBody, noReply: true });
-          // Add CC to the admin/requester
-          MailApp.sendEmail(recruiterEmail, subject, "", { 
+          MailApp.sendEmail(recruiterEmail, subject, "", { // Use original recruiterEmail and subject
               htmlBody: htmlBody, 
               noReply: true,
-              cc: ALERT_ADMIN_EMAIL // CC the admin email
+              cc: ALERT_ADMIN_EMAIL // Keep CCing the admin
           });
-          Logger.log(`Sent alert email to ${recruiterEmail} (CC: ${ALERT_ADMIN_EMAIL}) for ${candidatesForRecruiter.length} candidate(s).`);
+          Logger.log(`Sent alert email to ${recruiterEmail} (CC: ${ALERT_ADMIN_EMAIL}) for ${candidatesForRecruiter.length} candidate(s).`); // Restore original log message
           // --- End Restoration ---
           emailsSent++;
         } catch (emailError) {
-          Logger.log(`ERROR sending email to ${recruiterEmail}: ${emailError.toString()}`);
+          Logger.log(`ERROR sending email to ${recruiterEmail}: ${emailError.toString()}`); // Restore original error log
           // Consider sending a notification to an admin about the failure
-          sendAlertErrorNotification(`Failed to send alert email to ${recruiterEmail}`, emailError.stack);
+          sendAlertErrorNotification(`Failed to send alert email to ${recruiterEmail}`, emailError.stack); // Restore original error notification message
         }
       }
     });
@@ -259,7 +261,8 @@ function getLogDataForAlerts() {
       'Profile_link', // Corrected case based on user confirmation
       'Current_company', // Added via SQL
       'Position_name',
-      'Interview_email_sent_at' // <<< Added for nudge calculation
+      'Interview_email_sent_at', // <<< Added for nudge calculation
+      'Schedule_start_time' // <<< Added for business days calculation
   ];
   const optionalColumns = [
       'Interview Status_Real' // Check if this exists from potentially different sources
@@ -383,7 +386,7 @@ function deduplicateLogData(rows, colIndices) {
 }
 
 /**
- * Filters deduplicated candidates based on alert criteria.
+ * Filters deduplicated candidates based on alert criteria using business days.
  * @param {Array<Array>} deduplicatedRows Deduplicated rows.
  * @param {object} colIndices Map of column names to indices.
  * @returns {Array<Array>} Rows meeting alert criteria.
@@ -391,36 +394,50 @@ function deduplicateLogData(rows, colIndices) {
 function filterCandidatesForAlert(deduplicatedRows, colIndices) {
   const statusIdx = colIndices['STATUS_COLUMN'];
   const feedbackStatusIdx = colIndices['Feedback_status'];
-  const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
+  const completionTimeIdx = colIndices['Schedule_start_time']; // Use Schedule_start_time
   const candidateNameIdx = colIndices['Candidate_name']; // Get candidate name index
+  // Keep timeSinceIdx only as a fallback for logging/display if needed, not for filtering logic
+  // const timeSinceIdx = colIndices['Time_since_interview_completion_days']; 
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Set to start of day for consistent comparison
 
   return deduplicatedRows.filter(row => {
     // Ensure all required columns exist in the row
-    if (!row || row.length <= statusIdx || row.length <= feedbackStatusIdx || row.length <= timeSinceIdx || row.length <= candidateNameIdx) {
+    if (!row || row.length <= statusIdx || row.length <= feedbackStatusIdx || row.length <= completionTimeIdx || row.length <= candidateNameIdx) {
+       Logger.log(`Skipping row in filter due to missing required indices. Row length: ${row ? row.length : 'N/A'}`);
        return false;
     }
 
     const status = String(row[statusIdx] || '').trim();
     const feedbackStatus = String(row[feedbackStatusIdx] || '').trim();
-    const timeSince = parseFloat(row[timeSinceIdx]); // Parse the number of days
     const candidateName = String(row[candidateNameIdx] || '').trim();
+    const completionDate = parseDateSafe(row[completionTimeIdx]); // Use helper
 
-    const meetsCriteria =
+    if (!completionDate) {
+        Logger.log(`Skipping row for Profile ID ${row[colIndices['Profile_id']]} due to invalid Schedule_start_time: ${row[completionTimeIdx]}`);
+        return false; // Cannot calculate business days without a valid completion date
+    }
+
+    // Calculate business days difference
+    const businessDaysSinceCompletion = calculateBusinessDaysDifference(completionDate, today);
+
+    const meetsCriteria = 
       status === ALERT_STATUS_COMPLETED &&
       feedbackStatus === ALERT_FEEDBACK_AI_RECOMMENDED &&
-      !isNaN(timeSince) && timeSince > ALERT_DAYS_THRESHOLD &&
-      timeSince <= ALERT_STOP_DAYS_THRESHOLD; // Stop alerting after 7 days
+      businessDaysSinceCompletion > ALERT_DAYS_THRESHOLD && // Use business days
+      businessDaysSinceCompletion <= ALERT_STOP_DAYS_THRESHOLD; // Use business days
 
-    // <<< ADDED: Exclude specific candidate >>>
+    // Log the business day calculation
+    if (status === ALERT_STATUS_COMPLETED && feedbackStatus === ALERT_FEEDBACK_AI_RECOMMENDED) {
+        Logger.log(`Check: ProfileID=${row[colIndices['Profile_id']]}, Status=${status}, Feedback=${feedbackStatus}, CompletionDate=${completionDate.toISOString()}, BusinessDays=${businessDaysSinceCompletion}, MeetsCriteria=${meetsCriteria} (Thresholds: >${ALERT_DAYS_THRESHOLD}, <=${ALERT_STOP_DAYS_THRESHOLD})`);
+    }
+
+    // Exclude specific candidate (moved check here)
     if (meetsCriteria && candidateName.toLowerCase() === 'erica thomas') {
         Logger.log(`Excluding candidate 'Erica Thomas' from alerts.`);
         return false; // Exclude this candidate
     }
-
-    // Log details for rows meeting criteria (optional)
-    // if (meetsCriteria) {
-    //    Logger.log(`Candidate meeting criteria: Profile=${row[colIndices['Profile_id']]}, Position=${row[colIndices['Position_id']]}, Status=${status}, Feedback=${feedbackStatus}, Days=${timeSince}`);
-    // }
 
     return meetsCriteria;
   });
@@ -464,12 +481,17 @@ function groupCandidatesByRecruiter(candidatesToAlert, colIndices) {
  * @returns {string} The HTML content for the email body.
  */
 function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMatchCount, pendingNudgeCount) {
-  // Sort candidates by Time_since_interview_completion_days descending
-  const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
+  // Sort candidates by Business Days Since Completion descending
+  const completionTimeIdx = colIndices['Schedule_start_time'];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
   candidates.sort((a, b) => {
-      const timeA = parseFloat(a[timeSinceIdx]) || 0;
-      const timeB = parseFloat(b[timeSinceIdx]) || 0;
-      return timeB - timeA; // Descending order
+      const dateA = parseDateSafe(a[completionTimeIdx]);
+      const dateB = parseDateSafe(b[completionTimeIdx]);
+      const businessDaysA = dateA ? calculateBusinessDaysDifference(dateA, today) : -1; // Handle invalid dates
+      const businessDaysB = dateB ? calculateBusinessDaysDifference(dateB, today) : -1;
+      return businessDaysB - businessDaysA; // Descending order
   });
 
   let tableRowsHtml = '';
@@ -478,11 +500,13 @@ function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMat
       const profileLink = row[colIndices['Profile_link']] || '#'; // Default to '#' if no link
       const currentCompany = row[colIndices['Current_company']] || 'N/A';
       const positionName = row[colIndices['Position_name']] || 'N/A';
-      const timeSince = parseFloat(row[timeSinceIdx]);
-      const timeSinceDisplay = !isNaN(timeSince) ? timeSince.toFixed(0) : 'N/A'; // Show whole days
+      // Calculate business days for display
+      const completionDate = parseDateSafe(row[completionTimeIdx]);
+      const businessDaysSince = completionDate ? calculateBusinessDaysDifference(completionDate, today) : null;
+      const timeSinceDisplay = businessDaysSince !== null ? businessDaysSince : 'N/A'; // Display calculated business days
 
-      // Determine urgency highlighting
-      const isUrgent = !isNaN(timeSince) && timeSince > ALERT_URGENT_DAYS_THRESHOLD;
+      // Determine urgency highlighting based on business days
+      const isUrgent = businessDaysSince !== null && businessDaysSince > ALERT_URGENT_DAYS_THRESHOLD;
       const rowStyle = isUrgent ? ' style="background-color: #fff0f0; font-weight: bold;"' : ''; // Light red background + bold for urgent
 
       // Create a clickable link for the profile
@@ -532,7 +556,7 @@ function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMat
             <th>Candidate Name</th>
             <th>Current Company</th>
             <th>Position Name</th>
-            <th>Calendar Days Since Completion</th>
+            <th>Business Days Since Completion</th>
           </tr>
         </thead>
         <tbody>
@@ -574,9 +598,11 @@ function createAlertEmailHtml(recruiterEmail, candidates, colIndices, newHighMat
  * @returns {string} The HTML content for the email body.
  */
 function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
-  // Sort all candidates by Time_since_interview_completion_days descending
-  const timeSinceIdx = colIndices['Time_since_interview_completion_days'];
+  // Sort all candidates by Business Days Since Completion descending
+  const completionTimeIdx = colIndices['Schedule_start_time'];
   const recruiterEmailIdx = colIndices['Creator_user_id']; // Added for summary
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   // --- Generate Summary Table Data ---
   const recruiterCounts = {};
@@ -603,11 +629,13 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
   });
   // --- End Summary Table Data ---
 
-  // --- Generate Detailed Table Data (Existing Logic) ---
+  // --- Generate Detailed Table Data (Sort and Display Business Days) ---
   allAlertCandidates.sort((a, b) => {
-      const timeA = parseFloat(a[timeSinceIdx]) || 0;
-      const timeB = parseFloat(b[timeSinceIdx]) || 0;
-      return timeB - timeA; // Descending order (oldest first)
+      const dateA = parseDateSafe(a[completionTimeIdx]);
+      const dateB = parseDateSafe(b[completionTimeIdx]);
+      const businessDaysA = dateA ? calculateBusinessDaysDifference(dateA, today) : -1; // Handle invalid dates
+      const businessDaysB = dateB ? calculateBusinessDaysDifference(dateB, today) : -1;
+      return businessDaysB - businessDaysA; // Descending order (oldest first)
   });
 
   let tableRowsHtml = '';
@@ -617,11 +645,13 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
       const profileLink = row[colIndices['Profile_link']] || '#';
       const currentCompany = row[colIndices['Current_company']] || 'N/A';
       const positionName = row[colIndices['Position_name']] || 'N/A';
-      const timeSince = parseFloat(row[timeSinceIdx]);
-      const timeSinceDisplay = !isNaN(timeSince) ? timeSince.toFixed(0) : 'N/A';
+      // Calculate business days for display
+      const completionDate = parseDateSafe(row[completionTimeIdx]);
+      const businessDaysSince = completionDate ? calculateBusinessDaysDifference(completionDate, today) : null;
+      const timeSinceDisplay = businessDaysSince !== null ? businessDaysSince : 'N/A'; // Display calculated business days
 
-      // Determine urgency highlighting for admin digest as well
-      const isUrgent = !isNaN(timeSince) && timeSince > ALERT_URGENT_DAYS_THRESHOLD;
+      // Determine urgency highlighting based on business days for admin digest as well
+      const isUrgent = businessDaysSince !== null && businessDaysSince > ALERT_URGENT_DAYS_THRESHOLD;
       const rowStyle = isUrgent ? ' style="background-color: #fff0f0; font-weight: bold;"' : ''; // Light red background + bold for urgent
 
       const candidateLinkHtml = profileLink !== '#' ? `<a href="${profileLink}" target="_blank" style="color: #007bff; text-decoration: none;">${candidateName}</a>` : candidateName;
@@ -683,7 +713,7 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
             <th>Candidate Name</th>
             <th>Current Company</th>
             <th>Position Name</th>
-            <th>Calendar Days Since Completion</th>
+            <th>Business Days Since Completion</th>
           </tr>
         </thead>
         <tbody>
@@ -730,6 +760,36 @@ function sendAlertErrorNotification(errorMessage, stackTrace = '') {
 
 
 // --- Helper Functions ---
+
+/**
+ * Calculates the number of business days (Mon-Fri) between two dates (exclusive of start, inclusive of end date comparison).
+ * @param {Date} startDate The start date.
+ * @param {Date} endDate The end date.
+ * @returns {number} The number of business days.
+ */
+function calculateBusinessDaysDifference(startDate, endDate) {
+  if (!startDate || !endDate || startDate >= endDate) {
+    return 0;
+  }
+
+  let count = 0;
+  const current = new Date(startDate);
+  current.setHours(12, 0, 0, 0); // Normalize time to avoid DST issues
+
+  // Ensure endDate is also normalized for comparison
+  const normalizedEndDate = new Date(endDate);
+  normalizedEndDate.setHours(12, 0, 0, 0);
+
+  // Iterate day by day
+  while (current < normalizedEndDate) {
+    current.setDate(current.getDate() + 1);
+    const dayOfWeek = current.getDay(); // 0=Sunday, 6=Saturday
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      count++;
+    }
+  }
+  return count;
+}
 
 /**
  * Assigns a numerical rank to interview statuses for prioritization during deduplication.

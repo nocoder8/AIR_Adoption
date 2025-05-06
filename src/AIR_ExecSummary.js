@@ -5,7 +5,7 @@
 // into the AI interview process funnel, timelines, and outcomes.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -523,216 +523,224 @@ function createVolkscienceHtmlReport(metrics) {
   // --- Helper to generate timeseries table ---
   const generateTimeseriesTable = (dailyCounts) => {
       const sortedDates = Object.keys(dailyCounts).sort((a, b) => {
-          // Sort DD-MMM-YY requires parsing back to dates
           try {
               const dateA = new Date(a.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
               const dateB = new Date(b.replace(/(\d{2})-(\w{3})-(\d{2})/, '$2 $1, 20$3'));
               return dateA - dateB;
           } catch (e) {
-              return a.localeCompare(b); // Fallback to string sort if parsing fails
+              return a.localeCompare(b);
           }
       });
       if (sortedDates.length === 0) {
-          return '<p class="note">No interview invitations sent in this period.</p>';
+          return '<p style="font-size: 0.85em; color: #757575; margin-top: 15px; text-align: center;">No interview invitations sent in this period.</p>';
       }
-      // Use data-table for styling, but don't force center if it should fill width
-      let tableHtml = '<table class="data-table"><thead><tr><th>🗓️ Date (DD-MMM-YY)</th><th>✉️ Invitations Sent</th></tr></thead><tbody>';
-      sortedDates.forEach(date => {
-          tableHtml += `<tr><td>${date}</td><td>${dailyCounts[date]}</td></tr>`;
+
+      let tableHtml = '<table align="center" border="0" cellpadding="0" cellspacing="0" width="90%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; max-width: 98%;">'; // Centered-table styles
+      tableHtml += '<thead><tr><th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">🗓️ Date (DD-MMM-YY)</th><th style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;">✉️ Invitations Sent</th></tr></thead><tbody>';
+      sortedDates.forEach((date, index) => {
+          const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
+          tableHtml += `<tr style="background-color: ${bgColor};"><td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle;">${date}</td><td style="border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;">${dailyCounts[date]}</td></tr>`;
       });
       tableHtml += '</tbody></table>';
       return tableHtml;
   };
 
+  // Base styles for common elements
+  const thStyle = "border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 11px; vertical-align: middle; background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase;";
+  const tdStyle = "border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 12px; vertical-align: middle;";
+  const tdCenterStyle = "border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; font-size: 12px; vertical-align: middle;";
+  const percentValueStyle = "color: #0056b3; font-weight: normal;";
+
+
   let html = `
   <!DOCTYPE html>
   <html>
   <head>
+    <meta charset="UTF-8">
     <title>${VS_COMPANY_NAME} AI Interview Report</title>
-    <style>
-      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; margin: 0; }
-      .container { max-width: 850px; margin: 20px auto; padding: 25px; border: 1px solid #ccc; border-radius: 8px; background-color: #ffffff; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-      h1, h2, h3 { color: #333; }
-      h1 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 25px; font-size: 26px; color: #1a237e; }
-      h2 { margin-top: 30px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; }
-      .metric-block { background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px; }
-      .rate { color: #1976d2; } /* Adjusted Blue for rates */
-      .time { color: #ef6c00; } /* Updated Orange for time KPI */
-      .count { color: #424242; } /* Darker gray for counts */
-      .percent-value { color: #0056b3; font-weight: normal; } /* Dark blue for percentages */
-      .note { font-size: 0.85em; color: #757575; margin-top: 15px; }
-      table.data-table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
-      table.centered-table { margin-left: auto; margin-right: auto; width: auto; max-width: 98%; }
-      th, td { border: 1px solid #e0e0e0; padding: 6px 10px; /* Reduced padding */ text-align: left; font-size: 12px; vertical-align: middle; }
-      th { background-color: #f5f5f5; font-weight: bold; color: #424242; text-transform: uppercase; font-size: 11px; }
-      tr:nth-child(even) { background-color: #fafafa; } /* Alternating row color */
-      .breakdown-section { margin-top: 25px; }
-      /* KPI Box Styling - Using Nested Tables */
-      .kpi-nested-table { width: 100%; height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; /* Clip content if needed */ }
-      .kpi-nested-table td { border: none; /* Remove internal cell borders */ vertical-align: middle; text-align: center; }
-      .kpi-header-cell { /* background-color: #f5f5f5; */ padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; /* Divider line */ height: 30px; /* Fixed header height */ }
-      .kpi-value-cell { padding: 10px; font-size: 34px; font-weight: bold; height: 100%; /* Fill remaining height */ }
-      .kpi-value-cell .unit { font-size: 16px; font-weight: normal; margin-left: 3px; }
-
-      /* Specific KPI Backgrounds/Value Colors */
-      .kpi-value-cell.invitations { background-color: #e8f5e9; color: #2e7d32; }
-      .kpi-nested-table.invitations .kpi-header-cell { background-color: #e8f5e9; }
-
-      .kpi-value-cell.completion { background-color: #e3f2fd; color: #1976d2; }
-      .kpi-nested-table.completion .kpi-header-cell { background-color: #e3f2fd; }
-
-      .kpi-value-cell.time { background-color: #fff3e0; color: #ef6c00; }
-      .kpi-nested-table.time .kpi-header-cell { background-color: #fff3e0; }
-
-      .kpi-value-cell.stars { background-color: #f3e5f5; color: #8e24aa; }
-      .kpi-nested-table.stars .kpi-header-cell { background-color: #f3e5f5; }
-
-      .top-kpi-table { width: 100%; border-collapse: separate; border-spacing: 15px 0; /* Adjusted spacing */ margin-bottom: 25px; table-layout: fixed; }
-      .top-kpi-cell { width: 25%; /* Four columns */ vertical-align: top; padding: 0; }
-      .section-container { background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; /* Removed bottom margin */ }
-      /* Bold first column in breakdown tables */
-      .breakdown-section table.data-table tr td:first-child {
-          font-weight: bold;
-          text-align: left; /* Keep first column left-aligned */
-      }
-      /* Center align other breakdown table cells */
-      .breakdown-section table.data-table tr td:not(:first-child) {
-          text-align: center;
-      }
-    </style>
   </head>
-  <body>
-    <div class="container">
-      <h1>AI Recruiter Adoption: Executive Summary</h1>
+  <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 10px; margin: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 850px;">
+      <tr>
+        <td align="center">
+          <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 20px auto; padding: 25px;">
+            <!-- Header -->
+            <tr>
+              <td style="padding-bottom: 15px; margin-bottom: 25px; border-bottom: 2px solid #eee;">
+                <h1 style="color: #1a237e; text-align: center; font-size: 26px; margin:0; font-weight: bold;">AI Recruiter Adoption: Executive Summary</h1>
+              </td>
+            </tr>
 
-      <!-- Top KPI Boxes - 1x4 Layout -->
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="top-kpi-table">
-        <tr>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table invitations">
-              <tr><td class="kpi-header-cell">✉️ AI Invitations Sent</td></tr>
-              <tr><td class="kpi-value-cell invitations">${metrics.totalSent}</td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table completion">
-              <tr><td class="kpi-header-cell">✅ Completion Rate</td></tr>
-              <tr><td class="kpi-value-cell completion">${metrics.completionRate}<span class="unit">%</span></td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table time">
-              <tr><td class="kpi-header-cell">⏱️ Avg Time Sent to Completion*</td></tr>
-              <tr><td class="kpi-value-cell time">${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span class="unit">days</span></td></tr>
-            </table>
-          </td>
-          <td class="top-kpi-cell">
-            <table class="kpi-nested-table stars">
-              <tr><td class="kpi-header-cell">⭐ Avg Match Stars (Completed)</td></tr>
-              <tr><td class="kpi-value-cell stars">${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}</td></tr>
-            </table>
-          </td>
-        </tr>
-      </table>
+            <!-- Top KPI Boxes - Table Layout -->
+            <tr>
+              <td style="padding-top: 25px; padding-bottom: 10px;">
+                <table border="0" cellpadding="0" cellspacing="15" width="100%" style="border-collapse: separate; table-layout: fixed; margin-bottom: 10px;"> <!-- Reduced margin-bottom from 25px -->
+                  <tr>
+                    <td width="25%" style="vertical-align: top; padding: 0;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #e8f5e9;">
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px; background-color: #e8f5e9;">✉️ AI Invitations Sent</td></tr>
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #2e7d32;">
+                            ${metrics.totalSent}
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td width="25%" style="vertical-align: top; padding: 0;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #e3f2fd;">
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px; background-color: #e3f2fd;">✅ Completion Rate</td></tr>
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #1976d2;">
+                            ${metrics.completionRate}<span style="font-size: 16px; font-weight: normal; margin-left: 3px;">%</span>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td width="25%" style="vertical-align: top; padding: 0;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #fff3e0;">
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px; background-color: #fff3e0;">⏱️ Avg Time Sent to Completion*</td></tr>
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #ef6c00;">
+                            ${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays : 'N/A'}<span style="font-size: 16px; font-weight: normal; margin-left: 3px;">days</span>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td width="25%" style="vertical-align: top; padding: 0;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" style="height: 130px; border: 1px solid #cccccc; border-radius: 8px; border-collapse: collapse; table-layout: fixed; overflow: hidden; background-color: #f3e5f5;">
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: bold; color: #424242; border-bottom: 1px solid #cccccc; height: 30px; background-color: #f3e5f5;">⭐ Avg Match Stars (Completed)</td></tr>
+                        <tr><td style="border: none; vertical-align: middle; text-align: center; padding: 10px; font-size: 34px; font-weight: bold; height: 100%; color: #8e24aa;">
+                            ${metrics.avgMatchStars !== null && metrics.avgMatchStars !== undefined ? metrics.avgMatchStars : 'N/A'}
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
 
-      <!-- Interview Completion Status -->
-      <div class="metric-block">
-          <div class="section-title">📊 AI Screening Completion Status</div>
-          <table class="data-table centered-table">
-             <thead><tr><th>Status</th><th>Count</th><th>Percentage</th></tr></thead>
-             <tbody>
-             ${Object.entries(metrics.interviewStatusDistribution)
-                 .sort(([, dataA], [, dataB]) => dataB.count - dataA.count) // Sort by count descending
-                 .map(([status, data]) => `
-                     <tr>
-                         <td>${status}</td>
-                         <td>${data.count}</td>
-                         <td><span class="percent-value">${data.percentage}%</span></td>
-                     </tr>
-                 `).join('')}
-             </tbody>
-         </table>
-         <p class="note">Percentage is based on the total number of invitations sent since 17th April 2025 (Launch of AIR).</p>
-     </div>
+            <!-- Interview Completion Status -->
+            <tr>
+              <td style="padding-bottom: 15px;">
+                <div style="background-color: #fff; padding: 15px; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px;">
+                    <div style="font-size: 18px; color: #3f51b5; font-weight:bold; margin-bottom:10px; padding-bottom: 8px; border-bottom: 2px solid #e0e0e0;">📊 AI Screening Completion Status</div>
+                    <table align="center" border="0" cellpadding="0" cellspacing="0" width="90%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; max-width: 98%;">
+                       <thead><tr><th style="${thStyle}">Status</th><th style="${thStyle} text-align: center;">Count</th><th style="${thStyle} text-align: center;">Percentage</th></tr></thead>
+                       <tbody>
+                       ${Object.entries(metrics.interviewStatusDistribution)
+                           .sort(([, dataA], [, dataB]) => dataB.count - dataA.count)
+                           .map(([status, data], index) => `
+                               <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                   <td style="${tdStyle}">${status}</td>
+                                   <td style="${tdCenterStyle}">${data.count}</td>
+                                   <td style="${tdCenterStyle}"><span style="${percentValueStyle}">${data.percentage}%</span></td>
+                               </tr>
+                           `).join('')}
+                       </tbody>
+                   </table>
+                   <p style="font-size: 0.85em; color: #757575; margin-top: 15px;">Percentage is based on the total number of invitations sent since 17th April 2025 (Launch of AIR).</p>
+               </div>
+              </td>
+            </tr>
 
-     <!-- Daily Invitations Sent -->
-     <div class="section-container">
-        <div class="section-title">🗓️ Daily Invitations Sent</div>
-        <!-- Apply centered-table class to the table generated by the helper -->
-        ${generateTimeseriesTable(metrics.dailySentCounts).replace('<table class="data-table">', '<table class="data-table centered-table">')}
-     </div>
+           <!-- Daily Invitations Sent -->
+            <tr>
+              <td style="padding-bottom: 15px;">
+                <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                  <div style="font-size: 18px; color: #3f51b5; font-weight:bold; margin-bottom:10px; padding-bottom: 8px; border-bottom: 2px solid #e0e0e0;">🗓️ Daily Invitations Sent</div>
+                  ${generateTimeseriesTable(metrics.dailySentCounts)}
+                </div>
+              </td>
+            </tr>
+            
+            <!-- Breakdown by Job Function -->
+            <tr>
+              <td style="padding-bottom: 15px;">
+                <div style="margin-top: 10px; background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                   <h2 style="margin-top: 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; font-weight:bold;">💼 Breakdown by Job Function</h2>
+                   <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; max-width: 98%;">
+                       <thead>
+                          <tr>
+                             <th style="${thStyle} width: 25%;">Job Function</th>
+                             <th style="${thStyle} text-align: center;">Sent</th>
+                             <th style="${thStyle} text-align: center;">Completed (# / %)</th>
+                             <th style="${thStyle} text-align: center;">Scheduled</th>
+                             <th style="${thStyle} text-align: center;">Pending (# / %)</th>
+                             <th style="${thStyle} text-align: center;">Feedback Submitted</th>
+                             <th style="${thStyle} text-align: center;">Recruiter Submission Awaited</th>
+                           </tr>
+                       </thead>
+                       <tbody>
+                           ${Object.entries(metrics.byJobFunction)
+                               .sort(([funcA], [funcB]) => funcA.localeCompare(funcB))
+                               .map(([func, data], index) => `
+                                   <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                       <td style="${tdStyle} font-weight: bold;">${func}</td>
+                                       <td style="${tdCenterStyle}">${data.sent}</td>
+                                       <td style="${tdCenterStyle}">${data.completedNumber} (<span style="${percentValueStyle}">${data.completedPercentOfSent}%</span>)</td>
+                                       <td style="${tdCenterStyle}">${data.scheduled}</td>
+                                       <td style="${tdCenterStyle}">${data.pendingNumber} (<span style="${percentValueStyle}">${data.pendingPercentOfSent}%</span>)</td>
+                                       <td style="${tdCenterStyle}">${data.feedbackSubmitted}</td>
+                                       <td style="${tdCenterStyle}">${data.recruiterSubmissionAwaited}</td>
+                                   </tr>
+                               `).join('')}
+                       </tbody>
+                   </table>
+                </div>
+              </td>
+            </tr>
 
-     <div class="breakdown-section">
-         <h2>💼 Breakdown by Job Function</h2>
-         <table class="data-table centered-table">
-             <thead>
-                <tr>
-                   <th>Job Function</th>
-                   <th>Sent</th>
-                   <th>Completed (# / %)</th>
-                   <th>Scheduled</th>
-                   <th>Pending (# / %)</th>
-                   <th>Feedback Submitted</th>
-                   <th>Recruiter Submission Awaited</th>
-                 </tr>
-             </thead>
-             <tbody>
-                 ${Object.entries(metrics.byJobFunction)
-                     .sort(([funcA], [funcB]) => funcA.localeCompare(funcB)) // Sort alphabetically
-                     .map(([func, data]) => `
-                         <tr>
-                             <td>${func}</td>
-                             <td>${data.sent}</td>
-                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                             <td>${data.scheduled}</td>
-                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                             <td>${data.feedbackSubmitted}</td>
-                             <td>${data.recruiterSubmissionAwaited}</td>
-                         </tr>
-                     `).join('')}
-             </tbody>
-         </table>
-     </div>
+            <!-- Breakdown by Location Country -->
+            <tr>
+              <td style="padding-bottom: 15px;">
+                <div style="margin-top: 10px; background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                   <h2 style="margin-top: 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 18px; color: #3f51b5; font-weight:bold;">🌍 Breakdown by Location Country</h2>
+                    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; max-width: 98%;">
+                       <thead>
+                          <tr>
+                             <th style="${thStyle} width: 25%;">Country</th>
+                             <th style="${thStyle} text-align: center;">Sent</th>
+                             <th style="${thStyle} text-align: center;">Completed (# / %)</th>
+                             <th style="${thStyle} text-align: center;">Scheduled</th>
+                             <th style="${thStyle} text-align: center;">Pending (# / %)</th>
+                             <th style="${thStyle} text-align: center;">Feedback Submitted</th>
+                           </tr>
+                       </thead>
+                       <tbody>
+                           ${Object.entries(metrics.byCountry)
+                               .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB))
+                               .map(([ctry, data], index) => `
+                                   <tr style="background-color: ${index % 2 === 0 ? '#fafafa' : '#ffffff'};">
+                                       <td style="${tdStyle} font-weight: bold;">${ctry}</td>
+                                       <td style="${tdCenterStyle}">${data.sent}</td>
+                                       <td style="${tdCenterStyle}">${data.completedNumber} (<span style="${percentValueStyle}">${data.completedPercentOfSent}%</span>)</td>
+                                       <td style="${tdCenterStyle}">${data.scheduled}</td>
+                                       <td style="${tdCenterStyle}">${data.pendingNumber} (<span style="${percentValueStyle}">${data.pendingPercentOfSent}%</span>)</td>
+                                       <td style="${tdCenterStyle}">${data.feedbackSubmitted}</td>
+                                   </tr>
+                               `).join('')}
+                       </tbody>
+                   </table>
+                </div>
+              </td>
+            </tr>
+            
+            <!-- Footer Note -->
+            <tr>
+              <td style="text-align: center; padding-top:15px;">
+                <p style="font-size: 0.85em; color: #757575; margin-top: 15px;">
+                  *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
+                  Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
+                </p>
+              </td>
+            </tr>
 
-     <div class="breakdown-section">
-         <h2>🌍 Breakdown by Location Country</h2>
-          <table class="data-table centered-table">
-             <thead>
-                <tr>
-                   <th>Country</th>
-                   <th>Sent</th>
-                   <th>Completed (# / %)</th>
-                   <th>Scheduled</th>
-                   <th>Pending (# / %)</th>
-                   <th>Feedback Submitted</th>
-                 </tr>
-             </thead>
-             <tbody>
-                 ${Object.entries(metrics.byCountry)
-                     .sort(([ctryA], [ctryB]) => ctryA.localeCompare(ctryB)) // Sort alphabetically
-                     .map(([ctry, data]) => `
-                         <tr>
-                             <td>${ctry}</td>
-                             <td>${data.sent}</td>
-                             <td>${data.completedNumber} (<span class="percent-value">${data.completedPercentOfSent}%</span>)</td>
-                             <td>${data.scheduled}</td>
-                             <td>${data.pendingNumber} (<span class="percent-value">${data.pendingPercentOfSent}%</span>)</td>
-                             <td>${data.feedbackSubmitted}</td>
-                         </tr>
-                     `).join('')}
-             </tbody>
-         </table>
-     </div>
-
-     <p class="note" style="text-align: center; margin-top: 30px;">
-       *Avg Time Sent to Completion calculation currently uses Schedule Start Date as completion proxy.<br>
-       Report generated on ${new Date().toLocaleString()}. Timezone: ${Session.getScriptTimeZone()}.
-     </p>
-   </div>
- </body>
- </html>
- `;
- return html;
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+  </html>
+  `;
+  return html;
 }
 
 /**
