@@ -6,7 +6,7 @@
 
 // --- Configuration ---
 const VS_EMAIL_RECIPIENT = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
-const VS_EMAIL_CC = 'pkumar@eightfold.ai'; // Optional CC
+const VS_EMAIL_CC = 'pkumar@eightfold.ai,akashyap@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
 const VS_LOG_SHEET_NAME = 'Log_Enhanced'; // <<< VERIFY SHEET NAME

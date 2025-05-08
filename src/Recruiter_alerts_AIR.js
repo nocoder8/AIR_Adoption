@@ -438,6 +438,10 @@ function filterCandidatesForAlert(deduplicatedRows, colIndices) {
         Logger.log(`Excluding candidate 'Erica Thomas' from alerts.`);
         return false; // Exclude this candidate
     }
+    if (meetsCriteria && candidateName.toLowerCase() === 'daniel sheffield') {
+        Logger.log(`Excluding candidate 'Daniel Sheffield' from alerts.`);
+        return false; // Exclude this candidate
+    }
 
     return meetsCriteria;
   });
