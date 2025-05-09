@@ -5,7 +5,7 @@
 // including a breakdown by recruiter.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT_RB = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT_RB = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC_RB = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL_RB = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -960,7 +960,23 @@ function generateRecruiterTableRowsHtml(recruiterData) {
  * @returns {string} The HTML content for the email body.
  */
 function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log) {
-
+  // --- Fetch AI Insights ---
+  let aiInsights = "Insights generation is pending or encountered an issue."; // Default message
+  try {
+    // Check if the API key is likely configured by checking the script property directly
+    if (PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY')) {
+        Logger.log("GEMINI_API_KEY found in script properties, attempting to fetch insights.");
+        aiInsights = fetchInsightsFromGeminiAPI(metrics, adoptionChartData, recruiterActivityData);
+        Logger.log(`Received AI Insights (first 100 chars): ${aiInsights.substring(0,100)}...`);
+    } else {
+        aiInsights = "AI Insights could not be generated: GEMINI_API_KEY not configured in Script Properties.";
+        Logger.log(aiInsights);
+    }
+  } catch (e) {
+      Logger.log(`Error during fetchInsightsFromGeminiAPI call or processing from createRecruiterBreakdownHtmlReport: ${e.toString()} Stack: ${e.stack ? e.stack : 'N/A'}`);
+      aiInsights = "An error occurred while trying to generate AI insights. Please check the script logs for more details.";
+  }
+  // --- End Fetch AI Insights ---
   // Helper to generate timeseries table (limited to last 7 days)
   const generateTimeseriesTable = (dailyCounts) => {
       const sortedDates = Object.keys(dailyCounts).sort((a, b) => {
@@ -1069,6 +1085,17 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
                   </td>
                 </tr>
               </table>
+            </td>
+          </tr>
+
+          <!-- AI Powered Insights - MOVED HERE -->
+          <tr>
+            <td style="padding-top: 15px; padding-bottom: 15px;">
+              <div style="background-color: #fff8e1; padding: 20px; border: 1px solid #ffecb3; border-radius: 8px; margin-bottom: 15px;">
+                <div style="font-weight: bold; font-size: 16px; color: #c77700; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #ffe082;">💡 AI-Powered Observations</div>
+                <div style="font-size: 13px; color: #5f4300; white-space: pre-wrap; line-height: 1.6;">${formatInsightsForHtml(aiInsights, metrics)}</div>
+                ${!PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') ? '<p style="font-size: 0.8em; color: #757575; margin-top: 10px;">(AI insights feature requires GEMINI_API_KEY to be configured in Script Properties)</p>' : ''}
+              </div>
             </td>
           </tr>
 
@@ -1537,4 +1564,405 @@ function vsGetStatusRankRB(status) {
     if (status === SCHEDULED_STATUS_RAW) return 2;
     if (PENDING_STATUSES_RAW.includes(status)) return 3;
     return 99;
+}
+
+//====================================================================================================
+// --- Insight Formatting Helper (Revised) ---
+//====================================================================================================
+/**
+ * Formats AI-generated insights text for HTML display by bolding known entities and percentages.
+ * @param {string} insightsText The raw text insights from the LLM.
+ * @param {object} metrics The main metrics object to extract known entity names.
+ * @return {string} HTML formatted insights string.
+ */
+function formatInsightsForHtml(insightsText, metrics) {
+  if (!insightsText || typeof insightsText !== 'string') {
+    return 'No insights available or an error occurred.';
+  }
+
+  let formattedText = insightsText;
+
+  // 1. Collect known entities (recruiters, job functions, countries)
+  let knownEntities = [];
+  if (metrics) {
+    if (metrics.byRecruiter) {
+      knownEntities.push(...Object.keys(metrics.byRecruiter).filter(name => name && name.trim() !== '' && name !== 'Unknown' && name !== 'Unassigned'));
+    }
+    if (metrics.byJobFunction) {
+      knownEntities.push(...Object.keys(metrics.byJobFunction).filter(name => name && name.trim() !== '' && name !== 'Unknown' && name !== 'Unassigned'));
+    }
+    if (metrics.byCountry) {
+      knownEntities.push(...Object.keys(metrics.byCountry).filter(name => name && name.trim() !== '' && name !== 'Unknown' && name !== 'Unassigned'));
+    }
+    // Add any other specific entities you want to bold if they are reliably named.
+    // Example: If you have a list of project names or specific terms stored elsewhere in metrics.
+  }
+  
+  // Remove duplicates and filter out very short strings (e.g., single characters unless specifically desired)
+  knownEntities = [...new Set(knownEntities)].filter(e => e.length > 2); // Min length 3 for an entity name
+  // Sort by length descending. Crucial for correct replacement of substrings.
+  knownEntities.sort((a, b) => b.length - a.length);
+
+  // 2. Bold known entities (done first)
+  knownEntities.forEach(entity => {
+    // Escape special regex characters in the entity name itself
+    const escapedEntity = entity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      // Case-insensitive ('i') and global ('g') match, with word boundaries (\b)
+      const regex = new RegExp(`\\b(${escapedEntity})\\b`, 'gi'); 
+      formattedText = formattedText.replace(regex, '<strong>$1</strong>');
+    } catch (e) {
+      Logger.log(`Error creating or using regex for entity "${entity}": ${e.toString()}`);
+      // Continue without bolding this specific entity if regex fails
+    }
+  });
+
+  // 3. Bold percentages (e.g., 50.7%, 79.4%, 20%) - done after entities
+  // This regex looks for digits, optionally with a decimal, followed by a % sign,
+  // ensuring it's a whole word/number using word boundaries.
+  formattedText = formattedText.replace(/(\b\d+(\.\d+)?%\b)/g, '<strong>$1</strong>');
+
+  // 4. Replace newlines with <br> for HTML display (done last)
+  formattedText = formattedText.replace(/\n/g, '<br>');
+
+  return formattedText;
+}
+
+//====================================================================================================
+// --- Gemini API Integration for Insights ---
+//====================================================================================================
+
+/**
+ * Fetches insights from the Google Gemini API based on summarized report data.
+ * @param {object} metrics The calculated company metrics.
+ * @param {object} adoptionChartData The adoption chart data.
+ * @param {Array<object>} recruiterActivityData Recruiter activity data.
+ * @return {string} Textual insights from the LLM, or an error/status message.
+ */
+function fetchInsightsFromGeminiAPI(metrics, adoptionChartData, recruiterActivityData) {
+  const GEMINI_API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+
+  if (!GEMINI_API_KEY) {
+    Logger.log("ERROR: GEMINI_API_KEY not found in Script Properties. AI Insights will not be generated.");
+    return "AI Insights could not be generated: API Key not configured in Script Properties.";
+  }
+  // Using gemini-1.5-flash-latest as an example for a fast and capable model.
+  const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+
+  try {
+    // 1. Summarize your data
+    let dataSummary = `AI Interview Report Summary (Data for ${VS_COMPANY_NAME_RB}):\n\n`; // VS_COMPANY_NAME_RB should be globally accessible
+    dataSummary += `Overall Performance (${metrics.reportStartDate} to ${metrics.reportEndDate}):\n`;
+    dataSummary += `- Total AI Invitations Sent: ${metrics.totalSent}\n`;
+    dataSummary += `- Overall Completion Rate (KPI Adjusted, for invites older than 48 hours): ${metrics.kpiCompletionRateAdjusted}%\n`;
+    dataSummary += `- Overall Completion Rate (All Time): ${metrics.completionRateOriginal}%\n`;
+    dataSummary += `- Average Time Sent to Completion (Proxy: Schedule Start): ${metrics.avgTimeToScheduleDays !== null ? metrics.avgTimeToScheduleDays + ' days' : 'N/A'}\n`;
+    dataSummary += `- Average Match Stars (for Completed Interviews): ${metrics.avgMatchStars !== null ? metrics.avgMatchStars : 'N/A'}\n`;
+
+    // Revised Recruiter Performance Summary to consider all recruiters for insights
+    if (metrics.byRecruiter && Object.keys(metrics.byRecruiter).length > 0) {
+      const recruiterStats = Object.entries(metrics.byRecruiter)
+        .filter(([name]) => name !== 'Unknown') // Exclude 'Unknown' for specific high/low stats
+        .map(([name, data]) => ({
+          name: name,
+          sent: parseInt(data.sent) || 0,
+          completed: parseInt(data.completedNumber) || 0,
+          completionRate: parseFloat(data.completedPercentOfSent) || 0,
+          pending: parseInt(data.pendingNumber) || 0
+        }));
+
+      if (recruiterStats.length > 0) {
+        dataSummary += `\nRecruiter Performance Analysis (Based on ${recruiterStats.length} recruiters with known names):
+`;
+
+        // Sort by completion rate for high/low
+        const sortedByCompletionRate = [...recruiterStats].sort((a, b) => b.completionRate - a.completionRate);
+        dataSummary += `- Highest Completion Rate: ${sortedByCompletionRate[0].name} (${sortedByCompletionRate[0].completionRate}% from ${sortedByCompletionRate[0].sent} sent invites).
+`;
+
+        // For lowest, find someone with a minimum number of sent invites to make it meaningful
+        const minSentForLowConsideration = 5; // Adjustable threshold
+        const eligibleForLowest = sortedByCompletionRate.filter(r => r.sent >= minSentForLowConsideration);
+        if (eligibleForLowest.length > 0) {
+          const lowestPerformer = eligibleForLowest[eligibleForLowest.length - 1];
+          if (lowestPerformer.name !== sortedByCompletionRate[0].name) { // Avoid repeating if only one eligible
+            dataSummary += `- Lowest Completion Rate (among those with >=${minSentForLowConsideration} invites): ${lowestPerformer.name} (${lowestPerformer.completionRate}% from ${lowestPerformer.sent} sent invites).
+`;
+          }
+        }
+
+        // Sort by sent for most active
+        const sortedBySent = [...recruiterStats].sort((a, b) => b.sent - a.sent);
+        dataSummary += `- Most Invites Sent: ${sortedBySent[0].name} (${sortedBySent[0].sent} invites, ${sortedBySent[0].completionRate}% completion rate).
+`;
+
+        // Calculate overall average completion rate for this group
+        let totalSentByKnownRecruiters = 0;
+        let totalCompletedByKnownRecruiters = 0;
+        recruiterStats.forEach(r => {
+          totalSentByKnownRecruiters += r.sent;
+          totalCompletedByKnownRecruiters += r.completed;
+        });
+        const avgCompletionRateKnown = totalSentByKnownRecruiters > 0 ? parseFloat(((totalCompletedByKnownRecruiters / totalSentByKnownRecruiters) * 100).toFixed(1)) : 0;
+        dataSummary += `- Average Completion Rate (for these ${recruiterStats.length} recruiters): ${avgCompletionRateKnown}%\n`;
+      }
+
+      if (metrics.byRecruiter['Unknown'] && metrics.byRecruiter['Unknown'].sent > 0) {
+        dataSummary += `- Invites Sent by 'Unknown' Recruiters: ${metrics.byRecruiter['Unknown'].sent} (completion rate: ${metrics.byRecruiter['Unknown'].completedPercentOfSent}%).\n`;
+      }
+    }
+
+    // Enhanced Recruiter Last AI Invite Activity Summary
+    if (recruiterActivityData && recruiterActivityData.length > 0) {
+        dataSummary += `\nRecruiter Last AI Invite Activity:\n`;
+        const recentActivityDisplayCount = 3; // How many most recent to display
+
+        recruiterActivityData.slice(0, recentActivityDisplayCount).forEach(activity => {
+            let daysAgoText = "";
+            if (activity.daysAgo === 0) daysAgoText = "Today";
+            else if (activity.daysAgo === 1) daysAgoText = "Yesterday";
+            else daysAgoText = `${activity.daysAgo} days ago`;
+            dataSummary += `- Recently Active: ${activity.recruiter} (Last AI invite: ${daysAgoText}, 10-day trend: ${activity.dailyTrend}).\n`;
+        });
+
+        const inactivityThresholdDays = 7; // Recruiters with no AI invites for this many days or more
+        // Note: activity.daysAgo = 0 is today, 1 is yesterday. So >= 7 means 7 full days have passed (i.e., last activity was 7+ days ago)
+        const lessActiveRecruiters = recruiterActivityData.filter(activity => activity.daysAgo >= inactivityThresholdDays);
+
+        if (lessActiveRecruiters.length > 0) {
+            dataSummary += `\n- Recruiters with Notably Low Recent AI Invite Activity (Last AI invite >= ${inactivityThresholdDays} days ago):\n`;
+            lessActiveRecruiters.forEach(activity => {
+                 let daysAgoText = `${activity.daysAgo} days ago`; // Simplified for this section
+                 dataSummary += `  - ${activity.recruiter} (Last AI invite: ${daysAgoText}).\n`;
+            });
+        }
+    }
+
+    if (adoptionChartData && adoptionChartData.recruiterAdoptionData && adoptionChartData.recruiterAdoptionData.length > 0) {
+      dataSummary += `\nAI Adoption Rate by Recruiter (Post-Launch, >=${adoptionChartData.matchScoreThreshold} Match Score):\n`;
+      let totalEligibleForAdoption = 0;
+      let totalTookAIForAdoption = 0;
+      adoptionChartData.recruiterAdoptionData.forEach(rec => {
+        totalEligibleForAdoption += rec.totalCandidates;
+        totalTookAIForAdoption += rec.takenAI;
+      });
+      const overallAdoptionRate = totalEligibleForAdoption > 0 ? parseFloat(((totalTookAIForAdoption / totalEligibleForAdoption) * 100).toFixed(1)) : 0;
+      dataSummary += `- Overall Adoption Rate (Eligible Candidates): ${overallAdoptionRate}% (${totalTookAIForAdoption}/${totalEligibleForAdoption} took AI interview).\n`;
+      adoptionChartData.recruiterAdoptionData
+        .filter(r => r.recruiter !== 'Unassigned')
+        .sort((a,b) => b.adoptionRate - a.adoptionRate)
+        .slice(0,2)
+        .forEach(rec => {
+            dataSummary += `  - ${rec.recruiter}: ${rec.adoptionRate}% adoption (${rec.takenAI}/${rec.totalCandidates}).\n`;
+      });
+    }
+
+    if (recruiterActivityData && recruiterActivityData.length > 0) {
+        dataSummary += `\nRecruiter Last Invite Activity (Most Recent First):\n`;
+        recruiterActivityData.slice(0,3).forEach(activity => {
+            let daysAgoText = '';
+            if (activity.daysAgo === -1) daysAgoText = 'Today';
+            else if (activity.daysAgo === 0) daysAgoText = 'Yesterday';
+            else if (activity.daysAgo >= 1) daysAgoText = `${activity.daysAgo + 1} calendar days ago`;
+            else daysAgoText = 'Unknown';
+            dataSummary += `- ${activity.recruiter}: Last invite sent ${daysAgoText}. Trend (last 10 workdays, excl. weekends): ${activity.dailyTrend}\n`;
+        });
+    }
+
+    // Revised Performance by Job Function Summary
+    if (metrics.byJobFunction && Object.keys(metrics.byJobFunction).length > 0) {
+        const jobFunctionStats = Object.entries(metrics.byJobFunction)
+            .map(([funcName, data]) => ({
+                name: funcName,
+                sent: parseInt(data.sent) || 0,
+                completed: parseInt(data.completedNumber) || 0,
+                completionRate: parseFloat(data.completedPercentOfSent) || 0,
+                // recruiterSubmissionAwaited: parseInt(data.recruiterSubmissionAwaited) || 0 // If needed later
+            }));
+
+        if (jobFunctionStats.length > 0) {
+            dataSummary += `\nPerformance by Job Function (Analysis based on ${jobFunctionStats.length} functions):
+`;
+            const minSentForConsideration = 5; // Job functions with at least this many sent invites considered for low/high
+            const relevantJobFunctions = jobFunctionStats.filter(jf => jf.sent >= minSentForConsideration);
+
+            if (relevantJobFunctions.length > 0) {
+                // Sort by completion rate
+                const sortedByCompletion = [...relevantJobFunctions].sort((a, b) => b.completionRate - a.completionRate);
+
+                dataSummary += `- Highest Completion Rate (among functions with >=${minSentForConsideration} invites): ${sortedByCompletion[0].name} (${sortedByCompletion[0].completionRate}% from ${sortedByCompletion[0].sent} sent).
+`;
+
+                if (sortedByCompletion.length > 1) {
+                    const lowestPerformer = sortedByCompletion[sortedByCompletion.length - 1];
+                     if (lowestPerformer.name !== sortedByCompletion[0].name) { // Avoid repeating if only one eligible
+                        dataSummary += `- Lowest Completion Rate (among functions with >=${minSentForConsideration} invites): ${lowestPerformer.name} (${lowestPerformer.completionRate}% from ${lowestPerformer.sent} sent).
+`;
+                    }
+                }
+                 // Add one or two other notable ones if they exist and are different, e.g., highest volume
+                const sortedBySent = [...jobFunctionStats].sort((a,b) => b.sent - a.sent);
+                if (sortedBySent.length > 0 && sortedBySent[0].name !== sortedByCompletion[0].name && (sortedByCompletion.length <=1 || sortedBySent[0].name !== sortedByCompletion[sortedByCompletion.length-1].name)) {
+                     dataSummary += `- Highest Volume of Invites: ${sortedBySent[0].name} (${sortedBySent[0].sent} sent, ${sortedBySent[0].completionRate}% completion rate).\n`;
+                }
+
+                // Specifically add Engineering stats if it exists and meets threshold, or just add it if it exists
+                const engineeringStats = jobFunctionStats.find(jf => jf.name.toLowerCase() === 'engineering');
+                if (engineeringStats) {
+                    dataSummary += `- Specific Stats for Engineering: ${engineeringStats.sent} invites sent, ${engineeringStats.completionRate}% completion rate.\n`;
+                }
+
+            } else {
+                dataSummary += `- Insufficient data for detailed job function comparison (few functions with >=${minSentForConsideration} invites sent).
+`;
+            }
+        }
+    }
+
+    // Performance by Country Summary
+    if (metrics.byCountry && Object.keys(metrics.byCountry).length > 0) {
+        const countryStats = Object.entries(metrics.byCountry)
+            .map(([countryName, data]) => ({
+                name: countryName,
+                sent: parseInt(data.sent) || 0,
+                completed: parseInt(data.completedNumber) || 0,
+                completionRate: parseFloat(data.completedPercentOfSent) || 0,
+            }));
+
+        if (countryStats.length > 0) {
+            dataSummary += `\nPerformance by Country (Analysis based on ${countryStats.length} countries):
+`;
+            const minSentForCountryConsideration = 5; // Countries with at least this many sent invites
+            const relevantCountries = countryStats.filter(c => c.sent >= minSentForCountryConsideration);
+
+            if (relevantCountries.length > 0) {
+                const sortedByCompletion = [...relevantCountries].sort((a, b) => b.completionRate - a.completionRate);
+                dataSummary += `- Country with Highest Completion Rate (>=${minSentForCountryConsideration} invites): ${sortedByCompletion[0].name} (${sortedByCompletion[0].completionRate}% from ${sortedByCompletion[0].sent} sent).
+`;
+                if (sortedByCompletion.length > 1) {
+                    const lowestPerformer = sortedByCompletion[sortedByCompletion.length - 1];
+                    if (lowestPerformer.name !== sortedByCompletion[0].name) {
+                        dataSummary += `- Country with Lowest Completion Rate (>=${minSentForCountryConsideration} invites): ${lowestPerformer.name} (${lowestPerformer.completionRate}% from ${lowestPerformer.sent} sent).
+`;
+                    }
+                }
+                const sortedBySent = [...countryStats].sort((a,b) => b.sent - a.sent);
+                if (sortedBySent.length > 0 && sortedBySent[0].name !== sortedByCompletion[0].name && (sortedByCompletion.length <= 1 || sortedBySent[0].name !== sortedByCompletion[sortedByCompletion.length-1].name)) {
+                    dataSummary += `- Country with Highest Volume of Invites: ${sortedBySent[0].name} (${sortedBySent[0].sent} sent, ${sortedBySent[0].completionRate}% completion rate).
+`;
+                }
+            } else {
+                dataSummary += `- Insufficient data for detailed country comparison (few countries with >=${minSentForCountryConsideration} invites sent).
+`;
+            }
+        }
+    }
+    
+    dataSummary += "\nConsiderations: 'Completion Rate (KPI Adjusted)' excludes invites sent in the last 48 hours. 'Avg Time Sent to Completion' uses schedule start time as a proxy for completion. Adoption metrics are based on a specific cohort post-launch with a match score filter.\n";
+
+    // 2. Construct the Prompt
+    const promptText = `You are an expert data analyst for an HR department. Your task is to provide insightful commentary on a report summarizing AI interview adoption and recruiter activity for ${VS_COMPANY_NAME_RB}.
+Based *only* on the following data summary, please generate 3 to 5 bullet-point key observations.
+For each observation, identify the primary subject (e.g., overall performance, a specific job function, recruiter activity, country performance, AI adoption).
+When discussing a specific category from the summary (like Recruiter Performance, Job Functions, Countries, or Adoption):
+- Attempt to highlight the most significant variations by contrasting the best and worst performers (e.g., highest vs. lowest completion rates, most vs. least active) using the specific names and figures provided in the summary for that category.
+- Call out specific names (recruiters, job functions, countries) when discussing these variations if the data supports it.
+Focus on actionable insights, positive trends, areas that might need attention, or interesting patterns. 
+Do not refer to data not present in the summary. Be concise, ensuring each bullet point is a distinct observation.
+If data for the "Engineering" job function is present in the summary, please include one bullet point observation specifically about Engineering performance.
+
+Data Summary:
+---
+${dataSummary}
+---
+
+Key Observations (3-5 bullet points):
+`;
+
+    const payload = {
+      contents: [{ role: "user", parts: [{text: promptText}] }],
+      generationConfig: {
+        "temperature": 0.6,
+        "maxOutputTokens": 500,
+        "topP": 0.9,
+        "topK": 40
+      },
+       safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
+      ]
+    };
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
+    Logger.log(`Sending data to Gemini API. Endpoint: ${GEMINI_API_ENDPOINT}. Summary length: ${dataSummary.length} chars.`);
+    const response = UrlFetchApp.fetch(GEMINI_API_ENDPOINT, options);
+    const responseCode = response.getResponseCode();
+    const responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      const jsonResponse = JSON.parse(responseBody);
+      if (jsonResponse.candidates && jsonResponse.candidates.length > 0 &&
+          jsonResponse.candidates[0].content && jsonResponse.candidates[0].content.parts &&
+          jsonResponse.candidates[0].content.parts.length > 0 && jsonResponse.candidates[0].content.parts[0].text) {
+        
+        let insights = jsonResponse.candidates[0].content.parts[0].text;
+        Logger.log("Successfully received insights from Gemini API.");
+        insights = insights.trim();
+        // Attempt to format into bullet points if the model didn't already.
+        if (!insights.startsWith("* ") && !insights.startsWith("- ") && !insights.startsWith("• ")) {
+            insights = insights.split('\n').map(line => line.trim()).filter(line => line.length > 0).map(line => `• ${line}`).join('\n');
+        }
+        return insights;
+      } else if (jsonResponse.candidates && jsonResponse.candidates[0].finishReason) {
+         Logger.log(`Gemini API call finished with reason: ${jsonResponse.candidates[0].finishReason}.`);
+         let detail = jsonResponse.candidates[0].finishReason;
+         if(jsonResponse.candidates[0].safetyRatings) {
+           detail += ` Safety Ratings: ${JSON.stringify(jsonResponse.candidates[0].safetyRatings)}`;
+         }
+         return `AI Insights generation issue: Model finished with reason '${detail}'. Content might be blocked or prompt needs adjustment.`;
+      } else {
+        Logger.log(`Gemini API response does not contain expected text data. Response: ${responseBody}`);
+        return "AI Insights generation failed: Unexpected API response structure. Check logs.";
+      }
+    } else {
+      Logger.log(`Error calling Gemini API: ${responseCode} - ${responseBody}`);
+      return `Could not generate AI insights: API Error ${responseCode}. Details: ${responseBody.substring(0, 500)}. Check logs for full error.`;
+    }
+  } catch (error) {
+    Logger.log(`Critical Error in fetchInsightsFromGeminiAPI: ${error.toString()} \nStack: ${error.stack}`);
+    return `Could not generate AI insights due to an internal script error: ${error.message}. Check logs.`;
+  }
+}
+
+/**
+ * Sends an error notification email for the Recruiter Breakdown script.
+ * @param {string} errorMessage The main error message.
+ * @param {string} [stackTrace=''] Optional stack trace.
+ */
+function sendVsErrorNotificationRB(errorMessage, stackTrace = '') {
+  const recipient = VS_EMAIL_RECIPIENT_RB; // Use RB config
+  if (!recipient) {
+      Logger.log("CRITICAL ERROR: Cannot send error notification (RB) because VS_EMAIL_RECIPIENT_RB is not set.");
+      return;
+  }
+  try {
+      const subject = `ERROR: ${VS_COMPANY_NAME_RB} AI Recruiter Report Failed - ${new Date().toLocaleString()}`;
+      let body = `Error generating/sending ${VS_COMPANY_NAME_RB} AI Interview Recruiter Report:\n\n${errorMessage}\n\n`;
+      if (stackTrace) {
+          body += `Stack Trace:\n${stackTrace}\n\n`;
+      }
+      body += `Log Sheet URL: ${VS_LOG_SHEET_SPREADSHEET_URL_RB}`; // Use RB config
+      MailApp.sendEmail(recipient, subject, body);
+      Logger.log(`Error notification email (RB) sent to ${recipient}.`);
+   } catch (emailError) {
+      Logger.log(`CRITICAL: Failed to send error notification email (RB) to ${recipient}: ${emailError}`);
+   }
 }
