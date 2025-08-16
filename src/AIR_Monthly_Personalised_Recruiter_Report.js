@@ -34,7 +34,15 @@ const WEEKLY_REPORTS_CONFIG = {
   ],
   
   // Excluded recruiters (these won't receive reports)
-  EXCLUDED_RECRUITERS: ['Samrudh J', 'Pavan Kumar', 'Guruprasad Hegde', 'Unknown', 'Unassigned']
+  EXCLUDED_RECRUITERS: [
+    'Deepak Sehgal',
+    'Pavan Kumar', 
+    'Simran Chriselda',
+    'Samrudh J',
+    'Guruprasad Hegde',
+    'Unknown', 
+    'Unassigned'
+  ]
 };
 
 /**
