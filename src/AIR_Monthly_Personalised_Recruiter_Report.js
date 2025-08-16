@@ -54,6 +54,19 @@ function generateMonthlyPersonalisedRecruiterReports() {
   try {
     Logger.log('=== Starting Monthly Personalised Recruiter Reports Generation ===');
     
+    // Check if this is the first Monday of the month
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const dayOfMonth = today.getDate();
+    
+    // Only run on the first Monday of each month (Monday = 1, and day of month <= 7)
+    if (dayOfWeek !== 1 || dayOfMonth > 7) {
+      Logger.log(`Skipping report generation - not the first Monday of the month. Today: ${today.toDateString()}, Day of week: ${dayOfWeek}, Day of month: ${dayOfMonth}`);
+      return;
+    }
+    
+    Logger.log(`Proceeding with monthly report generation - first Monday of the month confirmed`);
+    
     // Get application data
     const appData = getApplicationDataForWeeklyReports();
     if (!appData || !appData.rows || appData.rows.length === 0) {
@@ -530,11 +543,11 @@ function createMonthlyPersonalisedRecruiterReportsTrigger() {
   }
   
   // Create new trigger for the first Monday of each month at 9 AM
+  // Note: Google Apps Script doesn't have monthly triggers, so we use weekly and check the date
   ScriptApp.newTrigger('generateMonthlyPersonalisedRecruiterReports')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
     .atHour(9)
-    .everyMonths(1) // Run every month
     .create();
     
   Logger.log('Monthly personalised recruiter reports trigger created (first Monday of each month at 9 AM)');
