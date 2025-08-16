@@ -54,18 +54,18 @@ function generateMonthlyPersonalisedRecruiterReports() {
   try {
     Logger.log('=== Starting Monthly Personalised Recruiter Reports Generation ===');
     
-    // Check if this is the first Monday of the month
+    // Check if this is the 3rd Monday of the month
     const today = new Date();
     const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
     const dayOfMonth = today.getDate();
     
-    // Only run on the first Monday of each month (Monday = 1, and day of month <= 7)
-    if (dayOfWeek !== 1 || dayOfMonth > 7) {
-      Logger.log(`Skipping report generation - not the first Monday of the month. Today: ${today.toDateString()}, Day of week: ${dayOfWeek}, Day of month: ${dayOfMonth}`);
+    // Only run on the 3rd Monday of each month (Monday = 1, and day of month between 15-21)
+    if (dayOfWeek !== 1 || dayOfMonth < 15 || dayOfMonth > 21) {
+      Logger.log(`Skipping report generation - not the 3rd Monday of the month. Today: ${today.toDateString()}, Day of week: ${dayOfWeek}, Day of month: ${dayOfMonth}`);
       return;
     }
     
-    Logger.log(`Proceeding with monthly report generation - first Monday of the month confirmed`);
+    Logger.log(`Proceeding with monthly report generation - 3rd Monday of the month confirmed`);
     
     // Get application data
     const appData = getApplicationDataForWeeklyReports();
@@ -542,15 +542,15 @@ function createMonthlyPersonalisedRecruiterReportsTrigger() {
     }
   }
   
-  // Create new trigger for the first Monday of each month at 9 AM
+  // Create new trigger for the 3rd Monday of each month at 4 PM
   // Note: Google Apps Script doesn't have monthly triggers, so we use weekly and check the date
   ScriptApp.newTrigger('generateMonthlyPersonalisedRecruiterReports')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(9)
+    .atHour(16) // 4 PM (24-hour format)
     .create();
     
-  Logger.log('Monthly personalised recruiter reports trigger created (first Monday of each month at 9 AM)');
+  Logger.log('Monthly personalised recruiter reports trigger created (3rd Monday of each month at 4 PM)');
 }
 
 /**
