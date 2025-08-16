@@ -12,6 +12,10 @@ const WEEKLY_REPORTS_CONFIG = {
   APP_SHEET_SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1g-Sp4_Ic91eXT9LeVwDJjRiMa5Xqf4Oks3aV29fxXRw/edit',
   APP_SHEET_NAME: 'Active+Rejected',
   
+  // Interview Log Sheet Configuration (for time-to-send metrics)
+  LOG_SHEET_SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit?gid=602557471#gid=602557471',
+  LOG_SHEET_NAME: 'Log_Enhanced',
+  
   // Email Configuration
   FROM_EMAIL: 'ai-interview-reports@eightfold.ai', // Update with actual sender email
   COMPANY_NAME: 'Eightfold',
@@ -77,8 +81,12 @@ function generateMonthlyPersonalisedRecruiterReports() {
     
     Logger.log(`Retrieved ${appData.rows.length} rows from application sheet`);
     
+    // Get interview sent times for time-to-send metrics
+    const interviewSentMap = getInterviewSentTimes();
+    Logger.log(`Retrieved ${interviewSentMap.size} unique profile IDs with interview sent times.`);
+    
     // Calculate recruiter metrics
-    const recruiterMetrics = calculateRecruiterMetrics(appData.rows, appData.colIndices);
+    const recruiterMetrics = calculateRecruiterMetrics(appData.rows, appData.colIndices, interviewSentMap);
     if (!recruiterMetrics || Object.keys(recruiterMetrics).length === 0) {
       Logger.log('ERROR: No recruiter metrics calculated. Cannot generate reports.');
       return;
@@ -202,9 +210,10 @@ function getApplicationDataForWeeklyReports() {
  * Calculates metrics for each recruiter
  * @param {Array<Array>} appRows Application data rows
  * @param {object} colIndices Column indices
+ * @param {Map<string, Date>} interviewSentMap Map of Profile ID to interview sent date
  * @returns {object} Object with recruiter metrics
  */
-function calculateRecruiterMetrics(appRows, colIndices) {
+function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new Map()) {
   Logger.log('--- Calculating Recruiter Metrics ---');
   
   const recruiterMetrics = {};
@@ -221,6 +230,7 @@ function calculateRecruiterMetrics(appRows, colIndices) {
     const lastStage = String(row[colIndices['Last_stage']] || '').trim().toUpperCase();
     const aiInterview = String(row[colIndices['Ai_interview']] || '').trim().toUpperCase();
     const applicationTs = vsParseDateSafeRB(row[colIndices['Application_ts']]);
+    const profileId = row[colIndices['Profile_id']]?.toString().trim();
     
     // Skip if no recruiter name
     if (!recruiterName) {
@@ -243,7 +253,9 @@ function calculateRecruiterMetrics(appRows, colIndices) {
         email: String(row[colIndices['Recruiter email']] || '').trim(),
         historical: { eligible: 0, aiDone: 0, percentage: 0 },
         recent: { eligible: 0, aiDone: 0, percentage: 0 },
-        detailedData: []
+        detailedData: [],
+        timeDiffSumMs: 0, // For calculating average time to send
+        timeDiffCount: 0  // Count of valid time differences
       };
     }
     
@@ -282,36 +294,56 @@ function calculateRecruiterMetrics(appRows, colIndices) {
           applicationStatus: row[colIndices['Application_status']] || 'N/A'
         });
       }
+      
+      // Calculate time to invite sent for eligible candidates who received an invite
+      if (aiInterview === 'Y' && profileId && applicationTs) {
+        const sentAtDate = interviewSentMap.get(profileId);
+        if (sentAtDate) {
+          const timeDiffMs = sentAtDate.getTime() - applicationTs.getTime();
+          if (timeDiffMs >= 0) { // Only consider non-negative differences
+            metrics.timeDiffSumMs += timeDiffMs;
+            metrics.timeDiffCount++;
+          }
+        }
+      }
     }
   });
   
-  // Calculate percentages and sort detailed data
-  Object.values(recruiterMetrics).forEach(metrics => {
-    if (metrics.historical.eligible > 0) {
-      metrics.historical.percentage = parseFloat(
-        ((metrics.historical.aiDone / metrics.historical.eligible) * 100).toFixed(1)
-      );
-    }
-    
-    if (metrics.recent.eligible > 0) {
-      metrics.recent.percentage = parseFloat(
-        ((metrics.recent.aiDone / metrics.recent.eligible) * 100).toFixed(1)
-      );
-    }
-    
-    // Sort detailed data by application date (most recent first)
-    if (metrics.detailedData.length > 0) {
-      metrics.detailedData.sort((a, b) => {
-        // Handle cases where dates might be 'N/A'
-        if (!a.applicationDateRaw && !b.applicationDateRaw) return 0;
-        if (!a.applicationDateRaw) return 1; // Put 'N/A' dates at the end
-        if (!b.applicationDateRaw) return -1;
-        
-        // Sort by date (most recent first)
-        return b.applicationDateRaw - a.applicationDateRaw;
-      });
-    }
-  });
+      // Calculate percentages, average time, and sort detailed data
+    Object.values(recruiterMetrics).forEach(metrics => {
+      if (metrics.historical.eligible > 0) {
+        metrics.historical.percentage = parseFloat(
+          ((metrics.historical.aiDone / metrics.historical.eligible) * 100).toFixed(1)
+        );
+      }
+      
+      if (metrics.recent.eligible > 0) {
+        metrics.recent.percentage = parseFloat(
+          ((metrics.recent.aiDone / metrics.recent.eligible) * 100).toFixed(1)
+        );
+      }
+      
+      // Calculate average time to invite sent
+      if (metrics.timeDiffCount > 0) {
+        const avgTimeMs = metrics.timeDiffSumMs / metrics.timeDiffCount;
+        metrics.avgTimeToInviteDays = parseFloat((avgTimeMs / (1000 * 60 * 60 * 24)).toFixed(1));
+      } else {
+        metrics.avgTimeToInviteDays = null;
+      }
+      
+      // Sort detailed data by application date (most recent first)
+      if (metrics.detailedData.length > 0) {
+        metrics.detailedData.sort((a, b) => {
+          // Handle cases where dates might be 'N/A'
+          if (!a.applicationDateRaw && !b.applicationDateRaw) return 0;
+          if (!a.applicationDateRaw) return 1; // Put 'N/A' dates at the end
+          if (!b.applicationDateRaw) return -1;
+          
+          // Sort by date (most recent first)
+          return b.applicationDateRaw - a.applicationDateRaw;
+        });
+      }
+    });
   
   Logger.log(`Calculated metrics for ${Object.keys(recruiterMetrics).length} recruiters`);
   return recruiterMetrics;
@@ -349,31 +381,45 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
         <div style="text-align: center; margin-bottom: 40px;">
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
-              <td style="width: 50%; padding-right: 15px; vertical-align: top;">
-                <div style="background-color: ${metrics.historical.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.historical.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
-                  <h3 style="color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 18px;">Historical AI Usage</h3>
-                  <div style="font-size: 32px; font-weight: bold; color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
+              <td style="width: 33.33%; padding-right: 10px; vertical-align: top;">
+                <div style="background-color: ${metrics.historical.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.historical.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 250px; margin: 0 auto;">
+                  <h3 style="color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 16px;">Historical AI Usage</h3>
+                  <div style="font-size: 28px; font-weight: bold; color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
                     ${metrics.historical.percentage}%
                   </div>
-                  <div style="font-size: 14px; color: #666;">
+                  <div style="font-size: 12px; color: #666;">
                     ${metrics.historical.aiDone} of ${metrics.historical.eligible} eligible candidates
                   </div>
-                  <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                  <div style="font-size: 11px; color: #999; margin-top: 5px;">
                     Since May 1st, 2025
                   </div>
                 </div>
               </td>
-              <td style="width: 50%; padding-left: 15px; vertical-align: top;">
-                <div style="background-color: ${metrics.recent.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.recent.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
-                  <h3 style="color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 18px;">Recent AI Usage</h3>
-                  <div style="font-size: 32px; font-weight: bold; color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
+              <td style="width: 33.33%; padding-left: 5px; padding-right: 5px; vertical-align: top;">
+                <div style="background-color: ${metrics.recent.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.recent.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 250px; margin: 0 auto;">
+                  <h3 style="color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 16px;">Recent AI Usage</h3>
+                  <div style="font-size: 28px; font-weight: bold; color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
                     ${metrics.recent.percentage}%
                   </div>
-                  <div style="font-size: 14px; color: #666;">
+                  <div style="font-size: 12px; color: #666;">
                     ${metrics.recent.aiDone} of ${metrics.recent.eligible} eligible candidates
                   </div>
-                  <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                  <div style="font-size: 11px; color: #999; margin-top: 5px;">
                     Last 30 days
+                  </div>
+                </div>
+              </td>
+              <td style="width: 33.33%; padding-left: 10px; vertical-align: top;">
+                <div style="background-color: ${metrics.avgTimeToInviteDays !== null && metrics.avgTimeToInviteDays <= 7 ? '#e8f5e9' : '#fff3e0'}; border: 1px solid ${metrics.avgTimeToInviteDays !== null && metrics.avgTimeToInviteDays <= 7 ? '#4caf50' : '#ff9800'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 250px; margin: 0 auto;">
+                  <h3 style="color: ${metrics.avgTimeToInviteDays !== null && metrics.avgTimeToInviteDays <= 7 ? '#2e7d32' : '#e65100'}; margin: 0 0 10px 0; font-size: 16px;">Avg. Time to Send</h3>
+                  <div style="font-size: 28px; font-weight: bold; color: ${metrics.avgTimeToInviteDays !== null && metrics.avgTimeToInviteDays <= 7 ? '#2e7d32' : '#e65100'}; margin-bottom: 5px;">
+                    ${metrics.avgTimeToInviteDays !== null ? `${metrics.avgTimeToInviteDays} days` : 'N/A'}
+                  </div>
+                  <div style="font-size: 12px; color: #666;">
+                    ${metrics.timeDiffCount} candidates with data
+                  </div>
+                  <div style="font-size: 11px; color: #999; margin-top: 5px;">
+                    Application to AI invite
                   </div>
                 </div>
               </td>
@@ -569,8 +615,12 @@ function testSingleMonthlyPersonalisedRecruiterReport(testRecruiterName = 'Akhil
       return;
     }
     
+    // Get interview sent times for time-to-send metrics
+    const interviewSentMap = getInterviewSentTimes();
+    Logger.log(`Retrieved ${interviewSentMap.size} unique profile IDs with interview sent times.`);
+    
     // Calculate metrics
-    const recruiterMetrics = calculateRecruiterMetrics(appData.rows, appData.colIndices);
+    const recruiterMetrics = calculateRecruiterMetrics(appData.rows, appData.colIndices, interviewSentMap);
     if (!recruiterMetrics[testRecruiterName]) {
       Logger.log(`ERROR: No metrics found for recruiter: ${testRecruiterName}`);
       Logger.log(`Available recruiters: ${Object.keys(recruiterMetrics).join(', ')}`);
@@ -585,6 +635,7 @@ function testSingleMonthlyPersonalisedRecruiterReport(testRecruiterName = 'Akhil
     Logger.log(`=== Metrics for ${testRecruiterName} ===`);
     Logger.log(`Historical: ${metrics.historical.aiDone}/${metrics.historical.eligible} (${metrics.historical.percentage}%)`);
     Logger.log(`Recent: ${metrics.recent.aiDone}/${metrics.recent.eligible} (${metrics.recent.percentage}%)`);
+    Logger.log(`Average time to invite: ${metrics.avgTimeToInviteDays !== null ? `${metrics.avgTimeToInviteDays} days` : 'N/A'} (${metrics.timeDiffCount} candidates with data)`);
     Logger.log(`Detailed data rows: ${metrics.detailedData.length}`);
     
     // Test email sending (enabled for testing)
@@ -620,6 +671,95 @@ function vsParseDateSafeRB(dateInput) {
   }
   const date = new Date(dateInput);
   return !isNaN(date.getTime()) ? date : null;
+}
+
+/**
+ * Reads the interview log sheet and returns a map of Profile ID to the earliest interview sent date.
+ * @returns {Map<string, Date>} A map where keys are profile IDs and values are Date objects.
+ */
+function getInterviewSentTimes() {
+  const interviewSentMap = new Map();
+  Logger.log(`--- Starting getInterviewSentTimes ---`);
+  try {
+    const spreadsheet = SpreadsheetApp.openByUrl(WEEKLY_REPORTS_CONFIG.LOG_SHEET_SPREADSHEET_URL);
+    Logger.log(`Opened log spreadsheet: ${spreadsheet.getName()}`);
+    let sheet = spreadsheet.getSheetByName(WEEKLY_REPORTS_CONFIG.LOG_SHEET_NAME);
+
+    // Sheet finding logic (similar to main function)
+    if (!sheet) {
+      Logger.log(`Log sheet "${WEEKLY_REPORTS_CONFIG.LOG_SHEET_NAME}" not found by name. Attempting to use sheet by gid or first sheet.`);
+      const gidMatch = WEEKLY_REPORTS_CONFIG.LOG_SHEET_SPREADSHEET_URL.match(/gid=(\d+)/);
+      if (gidMatch && gidMatch[1]) {
+        const gid = gidMatch[1];
+        const sheets = spreadsheet.getSheets();
+        sheet = sheets.find(s => s.getSheetId().toString() === gid);
+        if (sheet) Logger.log(`Using log sheet by ID: "${sheet.getName()}"`);
+      }
+      if (!sheet) {
+        sheet = spreadsheet.getSheets()[0];
+        if (sheet) {
+          Logger.log(`Warning: Using first available sheet in log spreadsheet: "${sheet.getName()}"`);
+        } else {
+          throw new Error(`Could not find any sheets in the log spreadsheet: ${WEEKLY_REPORTS_CONFIG.LOG_SHEET_SPREADSHEET_URL}`);
+        }
+      }
+    }
+     else {
+        Logger.log(`Using specified log sheet: "${sheet.getName()}"`);
+     }
+
+    const dataRange = sheet.getDataRange();
+    const data = dataRange.getValues();
+
+    if (data.length < 2) { // Need at least header row and one data row
+      Logger.log(`Not enough data in log sheet "${sheet.getName()}". Found ${data.length} rows. Skipping time-to-send calculation.`);
+      return interviewSentMap; // Return empty map
+    }
+
+    // Assume headers are in Row 1 (index 0) for this log sheet
+    const headers = data[0].map(String);
+    const profileIdColIndex = headers.indexOf('Profile_id');
+    const sentAtColIndex = headers.indexOf('Interview_email_sent_at');
+
+    if (profileIdColIndex === -1 || sentAtColIndex === -1) {
+      throw new Error(`Required column(s) not found in log sheet headers (Row 1): ${profileIdColIndex === -1 ? 'Profile_id' : ''}${profileIdColIndex === -1 && sentAtColIndex === -1 ? ', ' : ''}${sentAtColIndex === -1 ? 'Interview_email_sent_at' : ''}`);
+    }
+    Logger.log(`Log sheet headers found: Profile_id at index ${profileIdColIndex}, Interview_email_sent_at at index ${sentAtColIndex}`);
+
+    const rows = data.slice(1); // Data starts from row 2 (index 1)
+    let processedCount = 0;
+    let validDateCount = 0;
+
+    rows.forEach((row, idx) => {
+      if (row.length > Math.max(profileIdColIndex, sentAtColIndex)) {
+        const profileId = row[profileIdColIndex]?.toString().trim(); // Ensure string and trim whitespace
+        const rawSentAt = row[sentAtColIndex];
+
+        if (profileId && rawSentAt !== null && rawSentAt !== undefined && rawSentAt !== '') {
+          const sentAtDate = new Date(rawSentAt);
+          if (!isNaN(sentAtDate.getTime())) {
+            validDateCount++;
+            // If we haven't seen this profileId, or if this date is earlier than the stored one
+            if (!interviewSentMap.has(profileId) || sentAtDate < interviewSentMap.get(profileId)) {
+              interviewSentMap.set(profileId, sentAtDate);
+            }
+          } else {
+            // Logger.log(`Invalid date format for Interview_email_sent_at in log sheet row ${idx + 2}: ${rawSentAt}`); // Potentially noisy
+          }
+          processedCount++;
+        }
+      }
+    });
+
+    Logger.log(`Processed ${processedCount} rows from log sheet. Found ${validDateCount} valid send dates. Stored earliest date for ${interviewSentMap.size} unique Profile IDs.`);
+
+  } catch (error) {
+    Logger.log(`Error in getInterviewSentTimes: ${error.toString()} Stack: ${error.stack}`);
+    // Don't throw error, just return empty map so main report can still run
+    SpreadsheetApp.getUi().alert(`Warning: Could not process the Interview Log sheet. Time-to-send metrics will be unavailable. Error: ${error.message}`);
+  }
+  Logger.log(`--- Finished getInterviewSentTimes ---`);
+  return interviewSentMap;
 }
 
 
