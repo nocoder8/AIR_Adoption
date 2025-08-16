@@ -282,6 +282,19 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
       // Add to detailed data (only eligible candidates since May 1st, 2025, excluding "Not Eligible" status)
       if (applicationTs && applicationTs >= WEEKLY_REPORTS_CONFIG.HISTORICAL_CUTOFF_DATE && 
           (aiInterview !== 'N' || lastStage !== 'NEW' && lastStage !== 'ADDED')) {
+        
+        // Calculate time to invite sent for this candidate
+        let timeToInviteDays = null;
+        if (aiInterview === 'Y' && profileId && applicationTs) {
+          const sentAtDate = interviewSentMap.get(profileId);
+          if (sentAtDate) {
+            const timeDiffMs = sentAtDate.getTime() - applicationTs.getTime();
+            if (timeDiffMs >= 0) { // Only consider non-negative differences
+              timeToInviteDays = parseFloat((timeDiffMs / (1000 * 60 * 60 * 24)).toFixed(1));
+            }
+          }
+        }
+        
         metrics.detailedData.push({
           name: row[colIndices['Name']] || 'N/A',
           positionId: row[colIndices['Position_id']] || 'N/A',
@@ -292,7 +305,8 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
           aiInterview: aiInterview,
           applicationDate: applicationTs ? applicationTs.toLocaleDateString() : 'N/A',
           applicationDateRaw: applicationTs, // Keep raw date for sorting
-          applicationStatus: row[colIndices['Application_status']] || 'N/A'
+          applicationStatus: row[colIndices['Application_status']] || 'N/A',
+          timeToInviteDays: timeToInviteDays // Add time to invite for this candidate
         });
       }
       
@@ -457,9 +471,16 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
                 <tbody>
                   ${metrics.detailedData.map((candidate, index) => {
                     const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
-                    const aiStatus = candidate.aiInterview === 'Y' ? 
-                      '<span style="color: #4CAF50; font-weight: bold;">✅ Sent</span>' : 
-                      '<span style="color: #F44336; font-weight: bold;">❌ Missing</span>';
+                    
+                    // Create AI status with time difference for sent interviews
+                    let aiStatus;
+                    if (candidate.aiInterview === 'Y') {
+                      const timeText = candidate.timeToInviteDays !== null ? 
+                        `<br><span style="color: #999; font-size: 10px; font-weight: normal;">${candidate.timeToInviteDays} Days</span>` : '';
+                      aiStatus = `<span style="color: #4CAF50; font-weight: bold;">✅ Sent${timeText}</span>`;
+                    } else {
+                      aiStatus = '<span style="color: #F44336; font-weight: bold;">❌ Missing</span>';
+                    }
                     
                     return `
                       <tr style="background-color: ${bgColor};">
