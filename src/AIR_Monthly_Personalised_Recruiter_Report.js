@@ -90,7 +90,7 @@ function generateMonthlyPersonalisedRecruiterReports() {
         
         // Send email
         const emailSubject = `${WEEKLY_REPORTS_CONFIG.COMPANY_NAME} AI Interview Usage Report - Monthly - ${recruiterName}`;
-        const recipientEmail = getRecruiterEmail(recruiterName); // You'll need to implement this
+        const recipientEmail = getRecruiterEmail(recruiterName, metrics); // Pass metrics to get email
         
         if (recipientEmail) {
           sendRecruiterReportEmail(recipientEmail, emailSubject, reportHtml);
@@ -154,7 +154,7 @@ function getApplicationDataForWeeklyReports() {
     
     // Define required columns
     const requiredColumns = [
-      'Recruiter name', 'Last_stage', 'Ai_interview', 'Application_ts', 
+      'Recruiter name', 'Recruiter email', 'Last_stage', 'Ai_interview', 'Application_ts', 
       'Name', 'Position_id', 'Title', 'Current_company', 'Application_status', 'Source_name'
     ];
     
@@ -226,6 +226,7 @@ function calculateRecruiterMetrics(appRows, colIndices) {
     // Initialize recruiter data if not exists
     if (!recruiterMetrics[recruiterName]) {
       recruiterMetrics[recruiterName] = {
+        email: String(row[colIndices['Recruiter email']] || '').trim(),
         historical: { eligible: 0, aiDone: 0, percentage: 0 },
         recent: { eligible: 0, aiDone: 0, percentage: 0 },
         detailedData: []
@@ -434,12 +435,18 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
 /**
  * Gets email address for a recruiter
  * @param {string} recruiterName Name of the recruiter
+ * @param {object} metrics Recruiter metrics containing email
  * @returns {string|null} Email address or null if not found
  */
-function getRecruiterEmail(recruiterName) {
-  // TESTING MODE: All reports sent to pkumar@eightfold.ai for validation
-  // TODO: Replace with actual email mapping after testing
-  Logger.log(`TESTING MODE: Sending report for ${recruiterName} to pkumar@eightfold.ai`);
+function getRecruiterEmail(recruiterName, metrics) {
+  // Use email from the data if available
+  if (metrics && metrics.email && metrics.email.trim() !== '') {
+    Logger.log(`Using email from data for ${recruiterName}: ${metrics.email}`);
+    return metrics.email;
+  }
+  
+  // Fallback to testing mode if no email in data
+  Logger.log(`No email found in data for ${recruiterName}, using testing mode`);
   return 'pkumar@eightfold.ai';
   
   /* 
@@ -567,7 +574,7 @@ function testSingleMonthlyPersonalisedRecruiterReport(testRecruiterName = 'Akhil
     Logger.log(`Detailed data rows: ${metrics.detailedData.length}`);
     
     // Test email sending (enabled for testing)
-    const testEmail = getRecruiterEmail(testRecruiterName);
+    const testEmail = getRecruiterEmail(testRecruiterName, metrics);
     if (testEmail) {
       sendRecruiterReportEmail(testEmail, `TEST: AI Interview Report - ${testRecruiterName}`, reportHtml);
       Logger.log(`TEST EMAIL SENT to: ${testEmail}`);
