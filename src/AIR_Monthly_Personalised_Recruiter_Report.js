@@ -41,6 +41,7 @@ const WEEKLY_REPORTS_CONFIG = {
     'Samrudh J',
     'Guruprasad Hegde',
     'Nishant Chaudhary',
+    'Greg Schneider',
     'Unknown', 
     'Unassigned'
   ]
@@ -349,9 +350,9 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
               <td style="width: 50%; padding-right: 15px; vertical-align: top;">
-                <div style="background-color: #e8f5e9; border: 1px solid #4caf50; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
-                  <h3 style="color: #2e7d32; margin: 0 0 10px 0; font-size: 18px;">Historical AI Usage</h3>
-                  <div style="font-size: 32px; font-weight: bold; color: #2e7d32; margin-bottom: 5px;">
+                <div style="background-color: ${metrics.historical.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.historical.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
+                  <h3 style="color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 18px;">Historical AI Usage</h3>
+                  <div style="font-size: 32px; font-weight: bold; color: ${metrics.historical.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
                     ${metrics.historical.percentage}%
                   </div>
                   <div style="font-size: 14px; color: #666;">
@@ -363,9 +364,9 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
                 </div>
               </td>
               <td style="width: 50%; padding-left: 15px; vertical-align: top;">
-                <div style="background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
-                  <h3 style="color: #1976d2; margin: 0 0 10px 0; font-size: 18px;">Recent AI Usage</h3>
-                  <div style="font-size: 32px; font-weight: bold; color: #1976d2; margin-bottom: 5px;">
+                <div style="background-color: ${metrics.recent.percentage >= 80 ? '#e8f5e9' : '#ffebee'}; border: 1px solid ${metrics.recent.percentage >= 80 ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 20px; text-align: center; max-width: 300px; margin: 0 auto;">
+                  <h3 style="color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin: 0 0 10px 0; font-size: 18px;">Recent AI Usage</h3>
+                  <div style="font-size: 32px; font-weight: bold; color: ${metrics.recent.percentage >= 80 ? '#2e7d32' : '#c62828'}; margin-bottom: 5px;">
                     ${metrics.recent.percentage}%
                   </div>
                   <div style="font-size: 14px; color: #666;">
