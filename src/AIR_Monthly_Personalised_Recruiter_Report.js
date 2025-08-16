@@ -177,7 +177,7 @@ function getApplicationDataForWeeklyReports() {
     // Define required columns
     const requiredColumns = [
       'Recruiter name', 'Recruiter email', 'Last_stage', 'Ai_interview', 'Application_ts', 
-      'Name', 'Position_id', 'Title', 'Current_company', 'Application_status', 'Source_name'
+      'Name', 'Position_id', 'Title', 'Current_company', 'Application_status', 'Source_name', 'Profile_id'
     ];
     
     const colIndices = {};
@@ -215,6 +215,7 @@ function getApplicationDataForWeeklyReports() {
  */
 function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new Map()) {
   Logger.log('--- Calculating Recruiter Metrics ---');
+  Logger.log(`Interview sent map contains ${interviewSentMap.size} profile IDs`);
   
   const recruiterMetrics = {};
   const currentDate = new Date();
@@ -303,6 +304,11 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
           if (timeDiffMs >= 0) { // Only consider non-negative differences
             metrics.timeDiffSumMs += timeDiffMs;
             metrics.timeDiffCount++;
+          }
+        } else {
+          // Debug logging for first few unmatched profile IDs
+          if (metrics.timeDiffCount === 0 && index < 5) {
+            Logger.log(`DEBUG: Profile ID "${profileId}" not found in interview sent map for ${recruiterName}`);
           }
         }
       }
