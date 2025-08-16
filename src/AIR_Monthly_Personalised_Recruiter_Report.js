@@ -40,6 +40,7 @@ const WEEKLY_REPORTS_CONFIG = {
     'Simran Chriselda',
     'Samrudh J',
     'Guruprasad Hegde',
+    'Nishant Chaudhary',
     'Unknown', 
     'Unassigned'
   ]
