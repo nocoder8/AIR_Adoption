@@ -1,6 +1,9 @@
 /**
  * Checks the timestamp in cell B1 of the specified sheet.
  * Sends an email alert if the timestamp is older than 1 hour.
+ * 
+ * Last Updated: 2025-08-11 10:20 AM IST
+ * Changes: Fixed ReferenceError for totalOffsetInMinutes variable in alert body construction
  */
 function checkTimestampAndAlert() {
   // --- Configuration ---
@@ -149,16 +152,19 @@ function executeSingleTimestampCheck(config) {
     }
 
     let sheetTimestamp;
-    let parsedDatePartsForEmail = {}; // To store parts for email if needed
+    let parsedDatePartsForEmail = {};
+    let totalOffsetInMinutes = 0;
+    let parts = null;
+    let cleanedCellValue = '';
 
     try {
        // Example format: "04 May 2025 11:39 GMT+05:30" or "04 May 2025 11:39 +0530"
        // Remove "GMT" if present, and trim.
-       const cleanedCellValue = cellValue.replace(/GMT/i, '').trim(); // Case-insensitive GMT removal
+       cleanedCellValue = cellValue.replace(/GMT/i, '').trim(); // Case-insensitive GMT removal
 
        // Regex for "dd MMM yyyy HH:mm [+-]HH:mm" or "dd MMM yyyy HH:mm [+-]HHMM"
        // Supports optional colon in timezone offset.
-       const parts = cleanedCellValue.match(/(\d{1,2}) (\w{3}) (\d{4}) (\d{1,2}):(\d{2})\s*([+-]\d{2}):?(\d{2})?/);
+       parts = cleanedCellValue.match(/(\d{1,2}) (\w{3}) (\d{4}) (\d{1,2}):(\d{2})\s*([+-]\d{2}):?(\d{2})?/);
        if (!parts) {
          throw new Error(`Could not parse date string parts from: "${cleanedCellValue}" (Original: "${cellValue}")`);
        }
@@ -183,7 +189,7 @@ function executeSingleTimestampCheck(config) {
        
        // Calculate total offset in minutes from UTC. Example: +05:30 -> +330 minutes. -04:00 -> -240 minutes.
        // The sign of tzHourOffset determines the sign of the total offset.
-       const totalOffsetInMinutes = (tzHourOffset * 60) + (tzHourOffset < 0 ? -tzMinuteOffset : tzMinuteOffset);
+       totalOffsetInMinutes = (tzHourOffset * 60) + (tzHourOffset < 0 ? -tzMinuteOffset : tzMinuteOffset);
 
        // Create a Date object using UTC values for year, month, day, hour, minute.
        // This interprets the parsed hour and minute as if they were at UTC.
@@ -217,7 +223,8 @@ function executeSingleTimestampCheck(config) {
     if (diffMinutes > config.maxAgeMinutes) {
       Logger.log(`Timestamp for "${config.alertSubject}" is older than ${config.maxAgeMinutes} minutes. Sending alert.`);
       const localTimeOfTimestamp = new Date(sheetTimestamp.getTime() + (totalOffsetInMinutes * 60 * 1000));
-      const alertBody = `ALERT: ${config.alertSubject}\n\nThe timestamp in cell ${config.cellNotation} of sheet "${config.sheetName}" (Spreadsheet ID: ${config.spreadsheetId}) is outdated.\n\nCell Content: "${cellValue}"\nParsed as Local Time (from cell): ${localTimeOfTimestamp.toString()} (Offset: ${parts[6]}:${parts[7] || '00'})\nEquivalent UTC: ${sheetTimestamp.toUTCString()}\n\nCurrent Time (UTC): ${now.toUTCString()}\nTime Difference: ${diffMinutes.toFixed(2)} minutes.\nAllowed Max Age: ${config.maxAgeMinutes} minutes.`;
+      const offsetDisplay = parts && parts[6] ? `${parts[6]}:${parts[7] || '00'}` : 'Unknown';
+      const alertBody = `ALERT: ${config.alertSubject}\n\nThe timestamp in cell ${config.cellNotation} of sheet "${config.sheetName}" (Spreadsheet ID: ${config.spreadsheetId}) is outdated.\n\nCell Content: "${cellValue}"\nParsed as Local Time (from cell): ${localTimeOfTimestamp.toString()} (Offset: ${offsetDisplay})\nEquivalent UTC: ${sheetTimestamp.toUTCString()}\n\nCurrent Time (UTC): ${now.toUTCString()}\nTime Difference: ${diffMinutes.toFixed(2)} minutes.\nAllowed Max Age: ${config.maxAgeMinutes} minutes.`;
       MailApp.sendEmail(config.recipientEmail, config.alertSubject, alertBody);
       Logger.log(`Alert email sent to ${config.recipientEmail} for "${config.alertSubject}".`);
     } else {
@@ -246,7 +253,7 @@ function checkAllTimestampsAndAlerts() {
     cellNotation: 'B1',
     recipientEmail: 'pkumar@eightfold.ai', // *** IMPORTANT: Verify or replace with your actual email ID
     alertSubject: 'ALERT: AIR Data is not syncing (Volkscience Log)',
-    maxAgeMinutes: 60
+    maxAgeMinutes: 240
   };
 
   executeSingleTimestampCheck(alert1Config);
@@ -259,7 +266,7 @@ function checkAllTimestampsAndAlerts() {
     cellNotation: 'B1',
     recipientEmail: 'pkumar@eightfold.ai',
     alertSubject: 'ALERT: Active+Rejected database not syncing!!',
-    maxAgeMinutes: 60
+    maxAgeMinutes: 120
   };
   executeSingleTimestampCheck(alert2Config);
   

@@ -5,7 +5,7 @@
 // including a breakdown by recruiter.
 
 // --- Configuration ---
-const VS_EMAIL_RECIPIENT_RB = 'pkumar@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
+const VS_EMAIL_RECIPIENT_RB = 'akashyap@eightfold.ai'; // <<< UPDATE EMAIL RECIPIENT
 const VS_EMAIL_CC_RB = 'pkumar@eightfold.ai'; // Optional CC
 // Assuming the Log Enhanced sheet is in a separate Spreadsheet
 const VS_LOG_SHEET_SPREADSHEET_URL_RB = 'https://docs.google.com/spreadsheets/d/1IiI8ppxLSc0DvUbQcEBrDXk2eAExAiaA4iAfsykR8PE/edit'; // <<< VERIFY SPREADSHEET URL
@@ -61,17 +61,54 @@ function AIR_DailySummarytoAP() {
     }
      Logger.log(`Successfully retrieved ${logData.rows.length} rows from log sheet.`);
 
-    // 1b. Get Application Sheet Data (for Adoption Chart)
+    // 1b. Get Application Sheet Data (for Adoption Chart and AI Coverage)
     let adoptionChartData = null;
+    let hiringMetrics = null;
+    let aiCoverageMetrics = null;
+    let validationSheetUrl = null;
+    let recruiterValidationSheets = null;
     try {
         const appData = getApplicationDataForChartRB();
         if (appData && appData.rows) {
             Logger.log(`Successfully retrieved ${appData.rows.length} rows from application sheet.`);
             adoptionChartData = calculateAdoptionMetricsForChartRB(appData.rows, appData.colIndices);
             Logger.log(`Successfully calculated adoption chart metrics.`);
-            // Logger.log(`Adoption Chart Data: ${JSON.stringify(adoptionChartData)}`); // Optional detail log
+            
+            // Calculate hiring metrics
+            hiringMetrics = calculateHiringMetricsFromAppData(appData.rows, appData.colIndices);
+            Logger.log(`Successfully calculated hiring metrics.`);
+            
+            // Calculate AI coverage metrics
+            aiCoverageMetrics = calculateAICoverageMetricsRB(appData.rows, appData.colIndices);
+            if (aiCoverageMetrics) {
+                Logger.log(`Successfully calculated AI coverage metrics. Total eligible: ${aiCoverageMetrics.totalEligible}, Total AI interviews: ${aiCoverageMetrics.totalAIInterviews}, Overall percentage: ${aiCoverageMetrics.overallPercentage}%`);
+            } else {
+                Logger.log(`WARNING: AI coverage metrics calculation returned null. This could be due to missing required columns.`);
+            }
+            
+            // Create validation sheet for candidate count comparison
+            try {
+                validationSheetUrl = createCandidateCountValidationSheet(appData.rows, appData.colIndices);
+                Logger.log(`Successfully created validation sheet: ${validationSheetUrl}`);
+            } catch (validationError) {
+                Logger.log(`Warning: Could not create validation sheet: ${validationError.toString()}`);
+            }
+            
+            // Create detailed validation sheets for each recruiter
+            try {
+                recruiterValidationSheets = createAllRecruiterValidationSheets(appData.rows, appData.colIndices);
+                if (recruiterValidationSheets) {
+                    Logger.log(`Successfully created ${recruiterValidationSheets.successfulSheets} recruiter validation sheets`);
+                } else {
+                    Logger.log(`Warning: Could not create recruiter validation sheets`);
+                }
+            } catch (validationError) {
+                Logger.log(`Warning: Could not create recruiter validation sheets: ${validationError.toString()}`);
+            }
+            
+            // Logger.log(`Adoption Chart Data: ${JSON.stringify(adoptionChartData, null, 2)}`);
         } else {
-            Logger.log(`WARNING: No data retrieved from application sheet. Adoption chart will be skipped.`);
+            Logger.log(`WARNING: No data retrieved from application sheet. Adoption chart, hiring metrics, and AI coverage will be skipped.`);
         }
     } catch (appError) {
         Logger.log(`ERROR retrieving or processing application data for adoption chart: ${appError.toString()}`);
@@ -238,7 +275,7 @@ function AIR_DailySummarytoAP() {
     // Logger.log(`Calculated Metrics: ${JSON.stringify(metrics)}`); // Optional: Log detailed metrics
 
     // 4. Create HTML Report (Uses RB creator) - Pass adoption, activity data, and log recruiter index
-    const htmlContent = createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log);
+    const htmlContent = createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log, hiringMetrics, validationSheetUrl, aiCoverageMetrics, recruiterValidationSheets);
     Logger.log('Successfully generated HTML report content.');
 
     // 5. Send Email (Uses RB functions/config)
@@ -327,7 +364,8 @@ function getLogSheetDataRB() {
       'Schedule_start_time', 'Duration_minutes', 'Feedback_status', 'Feedback_json',
       'Match_stars', 'Location_country', 'Job_function', 'Position_id', 'Recruiter_name', // Ensure Recruiter_name is here
       'Creator_user_id', 'Reviewer_email', 'Hiring_manager_name',
-      'Days_pending_invitation', 'Interview Status_Real'
+      'Days_pending_invitation', 'Interview Status_Real',
+      'Position_approved_date'
   ];
 
   const colIndices = {};
@@ -454,7 +492,7 @@ function getApplicationDataForChartRB() {
 
   // Define columns needed for the adoption calculation
   const requiredAppColumns = [
-      'Profile_id', 'Last_stage', 'Ai_interview', 'Recruiter name', 'Application_status', 'Position_status', 'Application_ts'
+      'Profile_id', 'Name', 'Last_stage', 'Ai_interview', 'Recruiter name', 'Application_status', 'Position_status', 'Application_ts', 'Position_id', 'Title'
       // Add other columns if the weekly report's generateSegmentMetrics uses them
   ];
 
@@ -473,6 +511,33 @@ function getApplicationDataForChartRB() {
   // Add match stars index if found
   if (matchStarsColIndex !== -1) {
       appColIndices['Match_stars'] = matchStarsColIndex; // Use a consistent key
+  }
+
+  // Add Position_approved_date index if found
+  const positionApprovedDateIndex = headers.indexOf('Position approved date');
+  if (positionApprovedDateIndex !== -1) {
+      appColIndices['Position approved date'] = positionApprovedDateIndex;
+      Logger.log(`Found Position approved date column at index ${positionApprovedDateIndex}`);
+  } else {
+      Logger.log(`Optional column "Position approved date" not found. Candidate count comparison will be unavailable.`);
+      // Try to find similar column names
+      const possibleNames = ['Position approved date', 'Position_approved_date', 'Position Approved Date', 'Approved_date', 'Approved Date'];
+      for (const name of possibleNames) {
+          const index = headers.indexOf(name);
+          if (index !== -1) {
+              Logger.log(`Found similar column "${name}" at index ${index}. Please update the script to use this column name.`);
+              break;
+          }
+      }
+      
+      // Search for any column containing "position" and "approved" or "date"
+      const positionRelatedColumns = headers.filter(header => 
+          header.toLowerCase().includes('position') && 
+          (header.toLowerCase().includes('approved') || header.toLowerCase().includes('date'))
+      );
+      if (positionRelatedColumns.length > 0) {
+          Logger.log(`Found position-related columns: ${positionRelatedColumns.join(', ')}`);
+      }
   }
 
   if (missingAppCols.length > 0) {
@@ -959,7 +1024,12 @@ function generateRecruiterTableRowsHtml(recruiterData) {
  * @param {number} recruiterNameIdx_Log The index of the Recruiter_name column from the log sheet (-1 if not found).
  * @returns {string} The HTML content for the email body.
  */
-function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log) {
+function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruiterActivityData, recruiterNameIdx_Log, hiringMetrics, validationSheetUrl, aiCoverageMetrics, recruiterValidationSheets) {
+  Logger.log(`DEBUG: AI Coverage Metrics in HTML report: ${aiCoverageMetrics ? 'Present' : 'Null/Undefined'}`);
+  if (aiCoverageMetrics) {
+    Logger.log(`DEBUG: AI Coverage Metrics details - Total eligible: ${aiCoverageMetrics.totalEligible}, Total AI interviews: ${aiCoverageMetrics.totalAIInterviews}, Overall percentage: ${aiCoverageMetrics.overallPercentage}%`);
+  }
+  
   // --- Fetch AI Insights ---
   let aiInsights = "Insights generation is pending or encountered an issue."; // Default message
   try {
@@ -1099,6 +1169,74 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
             </td>
           </tr>
 
+          <!-- Hiring Success Metrics -->
+          ${hiringMetrics ? `
+          <tr>
+            <td style="padding-top: 15px; padding-bottom: 15px;">
+              <div style="background-color: #e8f5e9; padding: 20px; border: 1px solid #4caf50; border-radius: 8px; margin-bottom: 15px;">
+                <div style="font-weight: bold; font-size: 16px; color: #2e7d32; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #4caf50;">🎯 Hiring Success After AI Interviews</div>
+                <div style="display: flex; justify-content: space-around; text-align: center; margin: 20px 0;">
+                  <div style="flex: 1; padding: 15px;">
+                    <div style="font-size: 32px; font-weight: bold; color: #2e7d32;">${hiringMetrics.totalCandidates}</div>
+                    <div style="font-size: 12px; color: #424242; margin-top: 5px;">Total Candidates<br/>Reached Offer Stage</div>
+                  </div>
+                  <div style="flex: 1; padding: 15px;">
+                    <div style="font-size: 32px; font-weight: bold; color: #8e24aa;">${hiringMetrics.uniquePositionsFilled}</div>
+                    <div style="font-size: 12px; color: #424242; margin-top: 5px;">Unique Positions<br/>at Offer</div>
+                  </div>
+                  <div style="flex: 1; padding: 15px;">
+                    <div style="font-size: 32px; font-weight: bold; color: #1976d2;">
+                      ${hiringMetrics.aiAvgMatchScore !== null && hiringMetrics.nonAiAvgMatchScore !== null ? 
+                        `${hiringMetrics.aiAvgMatchScore} v/s ${hiringMetrics.nonAiAvgMatchScore}` : 
+                        'N/A'
+                      }
+                    </div>
+                    <div style="font-size: 12px; color: #424242; margin-top: 5px;">Match Score: AI v/s non-AI</div>
+                  </div>
+                  <div style="flex: 1; padding: 15px;">
+                    <div style="font-size: 32px; font-weight: bold; color: #ff6f00;">
+                      ${hiringMetrics.aiAvgCandidatesNeeded !== null && hiringMetrics.nonAiAvgCandidatesNeeded !== null ? 
+                        `${hiringMetrics.aiAvgCandidatesNeeded} v/s ${hiringMetrics.nonAiAvgCandidatesNeeded}` : 
+                        'N/A'
+                      }
+                    </div>
+                    <div style="font-size: 12px; color: #424242; margin-top: 5px;">Avg # of candidates<br/>needed to reach offer<br/>(AI v/s non-AI)</div>
+                  </div>
+                </div>
+                ${hiringMetrics.stageBreakdown && Object.keys(hiringMetrics.stageBreakdown).length > 0 ? `
+                <div style="margin-top: 15px;">
+                  <div style="font-weight: bold; font-size: 14px; color: #424242; margin-bottom: 10px;">Breakdown by Stage:</div>
+                  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; border: 1px solid #4caf50; border-radius: 4px; overflow: hidden;">
+                    <thead>
+                      <tr>
+                        <th style="border: 1px solid #4caf50; padding: 8px 12px; text-align: left; font-size: 12px; background-color: #4caf50; color: white; font-weight: bold;">Hiring Stage</th>
+                        <th style="border: 1px solid #4caf50; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #4caf50; color: white; font-weight: bold;">Count</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${Object.entries(hiringMetrics.stageBreakdown)
+                        .sort(([, a], [, b]) => b - a) // Sort by count descending
+                        .map(([stage, count], index) => `
+                        <tr style="background-color: ${index % 2 === 0 ? '#f1f8e9' : '#ffffff'};">
+                          <td style="border: 1px solid #4caf50; padding: 8px 12px; text-align: left; font-size: 12px;">${stage}</td>
+                          <td style="border: 1px solid #4caf50; padding: 8px 12px; text-align: center; font-size: 12px; font-weight: bold;">${count}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                  </table>
+                </div>
+                ` : ''}
+                <p style="font-size: 11px; color: #424242; margin-top: 15px; text-align: center;">
+                  <strong>Filters:</strong> Last_stage = Offer Approvals, etc. | Recruiter != Samrudh/Simran
+                  <br/><em>Avg. candidates calculation uses only AI candidates for AI-assisted reqs & requires >= 3 candidates.</em>
+                  ${!hiringMetrics.hasPositionIdColumn ? '<br/><span style="color: #f57c00;">Note: Position_id column not found.</span>' : ''}
+                  ${!hiringMetrics.hasMatchStarsColumn ? '<br/><span style="color: #f57c00;">Note: Match_stars column not found.</span>' : ''}
+                  ${validationSheetUrl ? `<br/><a href="${validationSheetUrl}" style="color: #1976d2; text-decoration: underline;">📊 View Detailed Position-Level Validation Data</a>` : ''}
+                </p>
+              </div>
+            </td>
+          </tr>
+          ` : ''}
+
           <!-- Side-by-side Sections - Table Layout -->
           <tr>
             <td style="padding-bottom: 15px;">
@@ -1202,6 +1340,24 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
             </td>
           </tr>
 
+          <!-- AI Interview Coverage Bar Chart -->
+          ${aiCoverageMetrics ? `
+          <tr>
+            <td style="padding-top: 10px; padding-bottom: 10px;">
+              ${generateAICoverageBarChartHtml(aiCoverageMetrics)}
+            </td>
+          </tr>
+          ` : ''}
+
+          <!-- Detailed Validation Sheets -->
+          ${recruiterValidationSheets ? `
+          <tr>
+            <td style="padding-top: 10px; padding-bottom: 10px;">
+              ${generateValidationSheetsHtml(recruiterValidationSheets)}
+            </td>
+          </tr>
+          ` : ''}
+
           <!-- Recruiter Last Activity Table (Moved Up) -->
           <tr>
             <td style="padding-top: 10px; padding-bottom: 10px;">
@@ -1248,55 +1404,7 @@ function createRecruiterBreakdownHtmlReport(metrics, adoptionChartData, recruite
             </td>
           </tr>
 
-          <!-- Adoption Rate by Recruiter Bar Chart -->
-          <tr>
-            <td style="padding-top: 10px; padding-bottom: 10px;">
-              <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
-                <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📊 AI Adoption Rate by Recruiter (Post-Launch, ≥${adoptionScoreThreshold} Match Score)</div>
-                ${!hasMatchStarsColumnForAdoption ?
-                  '<div style="padding: 10px; color: #cc3300; text-align: center; font-size: 0.9em;"><b>Warning:</b> Match score column not found in Application sheet. Filter could not be applied.</div>' : ''}
-                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 15px 0; border: 1px solid #ddd; padding: 15px; background-color: white; border-radius: 5px; box-sizing: border-box; border-collapse: separate; border-spacing: 0 8px;">
-                   <tbody>
-                   ${hasAdoptionData ?
-                       adoptionChartData.recruiterAdoptionData
-                       .sort((a, b) => { if (a.recruiter === 'Unassigned') return 1; if (b.recruiter === 'Unassigned') return -1; return a.recruiter.localeCompare(b.recruiter); })
-                       .map(data => {
-                           const adoptionRate = data.adoptionRate || 0;
-                           const displayWidth = Math.max(adoptionRate, 0);
-                           const takenCount = data.takenAI || 0;
-                           const eligibleCount = data.totalCandidates || 0;
-                           return `
-                           <tr>
-                             <td style="width: 220px; padding-right: 10px; text-align: left; font-weight: bold; font-size: 13px; overflow: hidden; text-overflow: ellipsis; color: #222; box-sizing: border-box; border: none; padding: 0; vertical-align: middle; height: 24px; line-height: 24px;" title="${data.recruiter} (${takenCount}/${eligibleCount})">
-                               ${data.recruiter} (${takenCount}/${eligibleCount})<span style="color: #CC5500; font-weight: bold;"> [${adoptionRate}%]</span>
-                             </td>
-                             <td style="width: auto; border: none; padding: 0; vertical-align: middle; height: 24px; line-height: 24px;">
-                               <div style="width: 100%; height: 100%; background-color: #f0f0f0; border-radius: 3px; position: relative; border: 1px solid #cccccc; box-sizing: border-box;">
-                                 <div style="width: ${displayWidth}%; height: 100%; background-color: #4CAF50; border-radius: 3px;"></div>
-                               </div>
-                             </td>
-                           </tr>`;
-                       }).join('')
-                       :
-                       '<tr><td colspan="2" style="text-align:center; border: none; padding: 10px; color: #777;">No adoption data found or could not be calculated.</td></tr>'
-                   }
-                   </tbody>
-                </table>
-                <table border="0" cellpadding="0" cellspacing="10" align="center" style="margin-top: 15px; font-size: 12px;">
-                   <tr>
-                     <td style="vertical-align: middle;"><div style="width: 14px; height: 14px; border: 1px solid #ccc; background-color: #4CAF50;"></div></td>
-                     <td style="vertical-align: middle;">Invited (Eligible)</td>
-                     <td style="padding-left: 15px; vertical-align: middle;"><div style="width: 14px; height: 14px; border: 1px solid #ccc; background-color: #f0f0f0;"></div></td>
-                     <td style="vertical-align: middle;">Not Invited (Eligible)</td>
-                   </tr>
-                </table>
-                <p style="font-size: 11px; text-align: center; color: #757575; margin-top: 15px;">
-                    <a href="https://docs.google.com/document/d/1QWUn3G7VWrvfJY2rAk0pyCd0u2FtNKmxUCVc9ZQTm_w/edit?usp=sharing" target="_blank">How the adoption rate is calculated</a>.<br>
-                    Filtered for applications since ${APP_LAUNCH_DATE_RB.toLocaleDateString()}${hasMatchStarsColumnForAdoption ? ` and Match Score >= ${adoptionScoreThreshold}` : ' (Match Score filter not applied)'}.
-                </p>
-              </div>
-            </td>
-          </tr>
+
 
      <!-- Looker Studio Link -->
           <tr>
@@ -1738,24 +1846,7 @@ function fetchInsightsFromGeminiAPI(metrics, adoptionChartData, recruiterActivit
         }
     }
 
-    if (adoptionChartData && adoptionChartData.recruiterAdoptionData && adoptionChartData.recruiterAdoptionData.length > 0) {
-      dataSummary += `\nAI Adoption Rate by Recruiter (Post-Launch, >=${adoptionChartData.matchScoreThreshold} Match Score):\n`;
-      let totalEligibleForAdoption = 0;
-      let totalTookAIForAdoption = 0;
-      adoptionChartData.recruiterAdoptionData.forEach(rec => {
-        totalEligibleForAdoption += rec.totalCandidates;
-        totalTookAIForAdoption += rec.takenAI;
-      });
-      const overallAdoptionRate = totalEligibleForAdoption > 0 ? parseFloat(((totalTookAIForAdoption / totalEligibleForAdoption) * 100).toFixed(1)) : 0;
-      dataSummary += `- Overall Adoption Rate (Eligible Candidates): ${overallAdoptionRate}% (${totalTookAIForAdoption}/${totalEligibleForAdoption} took AI interview).\n`;
-      adoptionChartData.recruiterAdoptionData
-        .filter(r => r.recruiter !== 'Unassigned')
-        .sort((a,b) => b.adoptionRate - a.adoptionRate)
-        .slice(0,2)
-        .forEach(rec => {
-            dataSummary += `  - ${rec.recruiter}: ${rec.adoptionRate}% adoption (${rec.takenAI}/${rec.totalCandidates}).\n`;
-      });
-    }
+
 
     if (recruiterActivityData && recruiterActivityData.length > 0) {
         dataSummary += `\nRecruiter Last Invite Activity (Most Recent First):\n`;
@@ -1965,4 +2056,1195 @@ function sendVsErrorNotificationRB(errorMessage, stackTrace = '') {
    } catch (emailError) {
       Logger.log(`CRITICAL: Failed to send error notification email (RB) to ${recipient}: ${emailError}`);
    }
+}
+
+/**
+ * Calculates hiring metrics from application data for candidates who took AI interviews.
+ * @param {Array<Array>} appRows Raw rows from the application sheet.
+ * @param {object} appColIndices Column indices map for the application sheet.
+ * @returns {object} An object containing hiring metrics.
+ */
+function calculateHiringMetricsFromAppData(appRows, appColIndices) {
+  Logger.log(`--- Starting calculateHiringMetricsFromAppData ---`);
+
+  const hiringStages = [
+    'Offer Approvals', 'Offer Extended', 'Offer Declined', 'Pending Start', 'Hired'
+  ];
+
+  // ---- TOP LEVEL METRICS CALCULATION ----
+  const topLevelHiringCandidates = appRows.filter(row => {
+    const lastStage = row[appColIndices['Last_stage']];
+    return lastStage && hiringStages.includes(lastStage);
+  });
+  Logger.log(`Found ${topLevelHiringCandidates.length} total candidates who reached hiring stages`);
+
+  const recruiterNameIndex = appColIndices.hasOwnProperty('Recruiter name') ? appColIndices['Recruiter name'] : -1;
+  const filteredHiringCandidates = topLevelHiringCandidates.filter(row => {
+    if (recruiterNameIndex === -1) return true;
+    const recruiterName = row[recruiterNameIndex] || '';
+    return !recruiterName.toLowerCase().includes('samrudh') && !recruiterName.toLowerCase().includes('simran');
+  });
+  Logger.log(`After excluding Samrudh/Simran recruiters: ${filteredHiringCandidates.length} candidates at offer stage`);
+
+  const aiCandidates = filteredHiringCandidates.filter(row => (row[appColIndices['Ai_interview']] || '') === 'Y');
+  const nonAiCandidates = filteredHiringCandidates.filter(row => (row[appColIndices['Ai_interview']] || '') !== 'Y');
+  Logger.log(`AI candidates at offer stage: ${aiCandidates.length}, Non-AI candidates: ${nonAiCandidates.length}`);
+
+  const positionIdIndex = appColIndices.hasOwnProperty('Position_id') ? appColIndices['Position_id'] : -1;
+  const uniquePositions = new Set(aiCandidates.map(row => row[positionIdIndex]).filter(id => id));
+
+  const matchStarsIndex = appColIndices.hasOwnProperty('Match_stars') ? appColIndices['Match_stars'] : -1;
+  let aiAvgMatchScore = null, nonAiAvgMatchScore = null;
+  if (matchStarsIndex !== -1) {
+    const getAvgScore = (candidates) => {
+      const scores = candidates.map(row => parseFloat(row[matchStarsIndex])).filter(score => !isNaN(score) && score >= 0);
+      return scores.length > 0 ? parseFloat((scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1)) : null;
+    };
+    aiAvgMatchScore = getAvgScore(aiCandidates);
+    nonAiAvgMatchScore = getAvgScore(nonAiCandidates);
+  }
+
+  // ---- NUANCED CALCULATION for "Average Candidates Needed" ----
+  let aiAvgCandidatesNeeded = null, nonAiAvgCandidatesNeeded = null;
+  try {
+    const candidatesForRatio = appRows.filter(row => {
+      if (recruiterNameIndex === -1) return true;
+      const recruiterName = row[recruiterNameIndex] || '';
+      return !recruiterName.toLowerCase().includes('samrudh') && !recruiterName.toLowerCase().includes('simran');
+    });
+
+    const positionStats = {};
+    const progressedStages = [
+      'Hiring Manager Screen', 'Assessment', 'Onsite Interview', 'Final Interview', 'Candidate Withdrew', 'Candidate Hold',
+      'Offer Approvals', 'Offer Extended', 'Offer Declined', 'Pending Start', 'Hired'
+    ];
+    
+    candidatesForRatio.forEach(row => {
+      const posId = row[positionIdIndex];
+      if (!posId) return;
+      if (!positionStats[posId]) {
+        positionStats[posId] = { ai_progressed: 0, ai_offered: 0, non_ai_progressed: 0, non_ai_offered: 0, had_ai_interview: false };
+      }
+      const stats = positionStats[posId];
+      const lastStage = row[appColIndices['Last_stage']] || '';
+      const aiInterview = row[appColIndices['Ai_interview']] || '';
+      
+      const hasProgressed = progressedStages.includes(lastStage);
+      
+      if (aiInterview === 'Y') {
+        stats.had_ai_interview = true;
+        if (hasProgressed) {
+          stats.ai_progressed++;
+          if (hiringStages.includes(lastStage)) stats.ai_offered++;
+        }
+      } else {
+        if (hasProgressed) {
+          stats.non_ai_progressed++;
+          if (hiringStages.includes(lastStage)) stats.non_ai_offered++;
+        }
+      }
+    });
+
+    const aiPositionRatios = [], nonAiPositionRatios = [];
+    for (const posId in positionStats) {
+      const stats = positionStats[posId];
+      if (stats.had_ai_interview) {
+        // For AI positions, only require that an offer was made.
+        if (stats.ai_offered > 0) {
+          aiPositionRatios.push(stats.ai_progressed / stats.ai_offered);
+        }
+      } else {
+        // For Non-AI positions, keep the significance threshold.
+        if (stats.non_ai_progressed >= 3 && stats.non_ai_offered > 0) {
+          nonAiPositionRatios.push(stats.non_ai_progressed / stats.non_ai_offered);
+        }
+      }
+    }
+
+    if (aiPositionRatios.length > 0) aiAvgCandidatesNeeded = parseFloat((aiPositionRatios.reduce((a, b) => a + b, 0) / aiPositionRatios.length).toFixed(1));
+    if (nonAiPositionRatios.length > 0) nonAiAvgCandidatesNeeded = parseFloat((nonAiPositionRatios.reduce((a, b) => a + b, 0) / nonAiPositionRatios.length).toFixed(1));
+    Logger.log(`Calculated avg candidates needed. AI Ratios Count: ${aiPositionRatios.length}, Non-AI Ratios Count: ${nonAiPositionRatios.length}`);
+  } catch (e) {
+    Logger.log(`ERROR during nuanced average candidate calculation: ${e}`);
+  }
+  
+  // ---- Final Metrics Object ----
+  const positionApprovedIndex = appColIndices.hasOwnProperty('Position approved date') ? appColIndices['Position approved date'] : -1;
+  const metrics = {
+    totalCandidates: aiCandidates.length,
+    uniquePositionsFilled: uniquePositions.size,
+    stageBreakdown: hiringStages.reduce((acc, stage) => { acc[stage] = aiCandidates.filter(row => row[appColIndices['Last_stage']] === stage).length; return acc; }, {}),
+    hasPositionIdColumn: positionIdIndex !== -1,
+    aiAvgMatchScore, nonAiAvgMatchScore,
+    hasMatchStarsColumn: matchStarsIndex !== -1,
+    aiCandidatesCount: aiCandidates.length,
+    nonAiCandidatesCount: nonAiCandidates.length,
+    aiAvgCandidatesNeeded, nonAiAvgCandidatesNeeded,
+    hasPositionApprovedDateColumn: positionApprovedIndex !== -1
+  };
+
+  Logger.log(`Hiring Metrics: ${metrics.totalCandidates} AI candidates reached offer stage, ${metrics.uniquePositionsFilled} unique positions filled`);
+  Logger.log(`Match Score Comparison: AI avg=${aiAvgMatchScore}, Non-AI avg=${nonAiAvgMatchScore}`);
+  return metrics;
+}
+
+/**
+ * Creates a validation Google Sheet with detailed position-level data for candidate count comparison.
+ * @param {Array<Array>} appRows Raw rows from the application sheet.
+ * @param {object} appColIndices Column indices map for the application sheet.
+ * @returns {string} The URL of the created Google Sheet.
+ */
+function createCandidateCountValidationSheet(appRows, appColIndices) {
+  Logger.log(`--- Starting createCandidateCountValidationSheet ---`);
+  
+  try {
+    const spreadsheet = SpreadsheetApp.create(`AI Interview Candidate Count Validation - ${new Date().toISOString().split('T')[0]}`);
+    const sheet = spreadsheet.getActiveSheet();
+    
+    const headers = [
+      'Position ID', 'Position Title', 'Recruiter Name', 'Position Approved Date', 'AI Interview Used',
+      'Total Candidates Progressed', 'AI Candidates Progressed', 'Non-AI Candidates Progressed',
+      'Candidates Reached Offer', 'AI Candidates Reached Offer', 'Non-AI Candidates Reached Offer',
+      'AI Cands-to-Offer Ratio', 'Non-AI Cands-to-Offer Ratio',
+      'Hired Candidate Name', 'Included in Calc (>3 Progressed)'
+    ];
+    
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    
+    const progressedStages = [
+      'Hiring Manager Screen', 'Assessment', 'Onsite Interview', 'Final Interview', 'Candidate Withdrew', 'Candidate Hold',
+      'Offer Approvals', 'Offer Extended', 'Offer Declined', 'Pending Start', 'Hired'
+    ];
+    
+    const hiringStages = [
+      'Offer Approvals', 'Offer Extended', 'Offer Declined', 'Pending Start', 'Hired'
+    ];
+    
+    const { 
+      Position_id: positionIdIndex, Title: positionTitleIndex, 'Recruiter name': recruiterNameIndex,
+      'Position approved date': positionApprovedIndex, Ai_interview: aiInterviewIndex,
+      Last_stage: lastStageIndex, Name: nameIndex 
+    } = appColIndices;
+
+    if (positionIdIndex === undefined || positionApprovedIndex === undefined) {
+      throw new Error('Required columns Position_id or Position approved date not found');
+    }
+    
+    const currentYear = new Date().getFullYear();
+    const thisYearPositions = appRows.filter(row => {
+      const approvedDate = row[positionApprovedIndex];
+      if (!approvedDate) return false;
+      const date = vsParseDateSafeRB(approvedDate);
+      return date && date.getFullYear() === currentYear;
+    });
+    
+    const filteredPositions = thisYearPositions.filter(row => {
+      if (recruiterNameIndex === undefined) return true;
+      const recruiterName = (row[recruiterNameIndex] || '').toLowerCase();
+      return !recruiterName.includes('samrudh') && !recruiterName.includes('simran');
+    });
+    
+    const positionData = {};
+    
+    filteredPositions.forEach(row => {
+      const positionId = row[positionIdIndex];
+      if (!positionData[positionId]) {
+        positionData[positionId] = {
+          positionId, positionTitle: row[positionTitleIndex] || 'N/A',
+          recruiterName: row[recruiterNameIndex] || 'N/A', positionApprovedDate: row[positionApprovedIndex],
+          totalProgressed: 0, aiProgressed: 0, nonAiProgressed: 0,
+          totalReachedOffer: 0, aiReachedOffer: 0, nonAiReachedOffer: 0,
+          hasAiCandidates: false, hiredCandidates: []
+        };
+      }
+      
+      const stats = positionData[positionId];
+      const lastStage = row[lastStageIndex];
+      const aiInterview = row[aiInterviewIndex];
+      
+      if (progressedStages.includes(lastStage)) {
+        stats.totalProgressed++;
+        const wasOffered = hiringStages.includes(lastStage);
+
+        if (wasOffered) {
+          stats.totalReachedOffer++;
+        }
+
+        if (aiInterview === 'Y') {
+          stats.hasAiCandidates = true;
+          stats.aiProgressed++;
+          if (wasOffered) stats.aiReachedOffer++;
+        } else {
+          stats.nonAiProgressed++;
+          if (wasOffered) stats.nonAiReachedOffer++;
+        }
+        
+        if (wasOffered && lastStage === 'Hired' && nameIndex !== undefined) {
+          stats.hiredCandidates.push(row[nameIndex] || '');
+        }
+      }
+    });
+    
+    const positionRows = Object.values(positionData)
+      .filter(pos => pos.totalProgressed > 0)
+      .map(pos => {
+        const isAiPosition = pos.hasAiCandidates;
+        // Asymmetrical inclusion logic based on user feedback
+        const inclusionThresholdMet = isAiPosition 
+          ? pos.aiReachedOffer > 0 
+          : (pos.nonAiProgressed >= 3 && pos.nonAiReachedOffer > 0);
+        return [
+          pos.positionId, pos.positionTitle, pos.recruiterName, pos.positionApprovedDate,
+          isAiPosition ? 'Yes' : 'No',
+          pos.totalProgressed, pos.aiProgressed, pos.nonAiProgressed,
+          pos.totalReachedOffer, pos.aiReachedOffer, pos.nonAiReachedOffer,
+          pos.aiReachedOffer > 0 ? (pos.aiProgressed / pos.aiReachedOffer).toFixed(1) : 'N/A',
+          pos.nonAiReachedOffer > 0 ? (pos.nonAiProgressed / pos.nonAiReachedOffer).toFixed(1) : 'N/A',
+          pos.hiredCandidates.join(', '),
+          inclusionThresholdMet ? 'Yes' : 'No'
+        ];
+      });
+    
+    positionRows.sort((a, b) => b[5] - a[5]);
+    
+    if (positionRows.length > 0) {
+      sheet.getRange(2, 1, positionRows.length, headers.length).setValues(positionRows);
+    }
+    
+    sheet.autoResizeColumns(1, headers.length);
+    
+    Logger.log(`Validation sheet created with ${positionRows.length} positions.`);
+    
+    return spreadsheet.getUrl();
+    
+  } catch (error) {
+    Logger.log(`Error creating validation sheet: ${error.toString()} Stack: ${error.stack}`);
+    throw error;
+  }
+}
+
+/**
+ * Calculates AI interview coverage metrics by recruiter.
+ * Shows how many eligible candidates (not in "New" or "Added" stages) should have had AI interviews.
+ * @param {Array<Array>} appRows Rows from the application sheet.
+ * @param {object} appColIndices Column indices for the application sheet.
+ * @returns {object} Object containing coverage metrics by recruiter.
+ */
+function calculateAICoverageMetricsRB(appRows, appColIndices) {
+  Logger.log(`--- Starting calculateAICoverageMetricsRB ---`);
+  Logger.log(`DEBUG: Available column indices: ${JSON.stringify(appColIndices)}`);
+  
+  // More robust column name matching
+  const findColumnIndex = (possibleNames) => {
+    for (const name of possibleNames) {
+      if (appColIndices[name] !== undefined && appColIndices[name] !== -1) {
+        Logger.log(`DEBUG: Found column "${name}" at index ${appColIndices[name]}`);
+        return appColIndices[name];
+      }
+    }
+    return -1;
+  };
+  
+  const recruiterNameIdx = findColumnIndex(['Recruiter name', 'Recruiter_name', 'RecruiterName', 'recruiter name', 'recruiter_name']);
+  const lastStageIdx = findColumnIndex(['Last_stage', 'Last stage', 'LastStage', 'last_stage', 'last stage']);
+  const aiInterviewIdx = findColumnIndex(['Ai_interview', 'AI_interview', 'AI Interview', 'ai_interview', 'ai interview']);
+  const applicationTsIdx = findColumnIndex(['Application_ts', 'Application ts', 'ApplicationTs', 'application_ts']);
+  
+  Logger.log(`DEBUG: Column indices found - Recruiter name: ${recruiterNameIdx}, Last_stage: ${lastStageIdx}, Ai_interview: ${aiInterviewIdx}, Application_ts: ${applicationTsIdx}`);
+  
+  if (recruiterNameIdx === -1 || lastStageIdx === -1 || aiInterviewIdx === -1) {
+    Logger.log(`ERROR: Required columns not found for AI coverage calculation.`);
+    Logger.log(`ERROR: Available column names: ${Object.keys(appColIndices).join(', ')}`);
+    Logger.log(`ERROR: Recruiter: ${recruiterNameIdx}, Last_stage: ${lastStageIdx}, Ai_interview: ${aiInterviewIdx}`);
+    return null;
+  }
+  
+  const recruiterCoverage = {};
+  let totalEligible = 0;
+  let totalAIInterviews = 0;
+  
+  // Debug: Log first few rows to see the data structure
+  Logger.log(`DEBUG: Processing ${appRows.length} rows`);
+  if (appRows.length > 0) {
+    Logger.log(`DEBUG: First row sample - Recruiter: "${appRows[0][recruiterNameIdx]}", Last Stage: "${appRows[0][lastStageIdx]}", AI Interview: "${appRows[0][aiInterviewIdx]}"`);
+    
+    // Log more sample rows to see the data variety
+    for (let i = 0; i < Math.min(5, appRows.length); i++) {
+      const row = appRows[i];
+      if (row && row.length > Math.max(recruiterNameIdx, lastStageIdx, aiInterviewIdx)) {
+        const recruiter = String(row[recruiterNameIdx] || '').trim();
+        const stage = String(row[lastStageIdx] || '').trim().toUpperCase();
+        const aiInterview = String(row[aiInterviewIdx] || '').trim().toUpperCase();
+        Logger.log(`DEBUG: Row ${i} - Recruiter: "${recruiter}", Stage: "${stage}", AI Interview: "${aiInterview}"`);
+      }
+    }
+  }
+  
+  // Set May 1st, 2025 as the cutoff date
+  const mayFirst2025 = new Date('2025-05-01');
+  mayFirst2025.setHours(0, 0, 0, 0);
+  
+  appRows.forEach((row, index) => {
+    // Basic validation
+    if (!row || row.length <= Math.max(recruiterNameIdx, lastStageIdx, aiInterviewIdx)) {
+      if (index < 5) Logger.log(`DEBUG: Skipping row ${index} due to incomplete data`);
+      return; // Skip incomplete rows
+    }
+    
+    const recruiterName = String(row[recruiterNameIdx] || '').trim();
+    const lastStage = String(row[lastStageIdx] || '').trim().toUpperCase();
+    const aiInterview = String(row[aiInterviewIdx] || '').trim().toUpperCase();
+    
+    // Skip if no recruiter name
+    if (!recruiterName) {
+      if (index < 5) Logger.log(`DEBUG: Skipping row ${index} due to missing recruiter name`);
+      return;
+    }
+    
+    // Skip excluded recruiters
+    const excludedRecruiters = ['Samrudh J', 'Pavan Kumar', 'Guruprasad Hegde'];
+    if (excludedRecruiters.some(excluded => recruiterName.toLowerCase().includes(excluded.toLowerCase()))) {
+      if (index < 5) Logger.log(`DEBUG: Skipping row ${index} due to excluded recruiter: ${recruiterName}`);
+      return;
+    }
+    
+    // Check Application_ts filter (May 1st, 2025 or later)
+    const applicationTs = applicationTsIdx !== -1 ? vsParseDateSafeRB(row[applicationTsIdx]) : null;
+    if (!applicationTs || applicationTs < mayFirst2025) {
+      if (index < 5) Logger.log(`DEBUG: Skipping row ${index} due to Application_ts before May 1st, 2025: ${applicationTs}`);
+      return; // Skip candidates with application timestamp before May 1st, 2025
+    }
+    
+    // Check if candidate is eligible (only specific stages) - CASE INSENSITIVE
+    const eligibleStages = [
+      'HIRING MANAGER SCREEN',
+      'ASSESSMENT', 
+      'ONSITE INTERVIEW',
+      'FINAL INTERVIEW',
+      'OFFER APPROVALS',
+      'OFFER EXTENDED',
+      'OFFER DECLINED',
+      'PENDING START',
+      'HIRED'
+    ];
+    const isEligible = eligibleStages.some(stage => stage.toUpperCase() === lastStage);
+    
+    if (index < 5) {
+      Logger.log(`DEBUG: Row ${index} - Recruiter: "${recruiterName}", Last Stage: "${lastStage}", AI Interview: "${aiInterview}", Eligible: ${isEligible}`);
+    }
+    
+    if (isEligible) {
+      totalEligible++;
+      
+      // Initialize recruiter data if not exists
+      if (!recruiterCoverage[recruiterName]) {
+        recruiterCoverage[recruiterName] = {
+          totalEligible: 0,
+          totalAIInterviews: 0,
+          percentage: 0
+        };
+      }
+      
+      recruiterCoverage[recruiterName].totalEligible++;
+      
+      // Check if AI interview was conducted
+      if (aiInterview === 'Y') {
+        totalAIInterviews++;
+        recruiterCoverage[recruiterName].totalAIInterviews++;
+      }
+    }
+  });
+  
+  // Calculate percentages for each recruiter
+  Object.keys(recruiterCoverage).forEach(recruiter => {
+    const data = recruiterCoverage[recruiter];
+    data.percentage = data.totalEligible > 0 ? 
+      parseFloat(((data.totalAIInterviews / data.totalEligible) * 100).toFixed(1)) : 0;
+  });
+  
+  // Calculate overall percentage
+  const overallPercentage = totalEligible > 0 ? 
+    parseFloat(((totalAIInterviews / totalEligible) * 100).toFixed(1)) : 0;
+  
+  Logger.log(`AI Coverage Metrics: Total eligible candidates = ${totalEligible}, Total AI interviews = ${totalAIInterviews}, Overall percentage = ${overallPercentage}%`);
+  Logger.log(`DEBUG: Recruiter coverage data: ${JSON.stringify(recruiterCoverage)}`);
+  
+  // If no eligible candidates found, return a special object to show the table with a message
+  if (totalEligible === 0) {
+    Logger.log(`WARNING: No eligible candidates found. This could mean no candidates are in the target stages.`);
+    return {
+      recruiterCoverage: {},
+      totalEligible: 0,
+      totalAIInterviews: 0,
+      overallPercentage: 0,
+      noDataMessage: "No eligible candidates found. No candidates appear to be in the target stages (Hiring Manager Screen, Assessment, Onsite Interview, Final Interview, Offer Approvals, Offer Extended, Offer Declined, Pending Start, Hired), or there may be a data issue."
+    };
+  }
+  
+  return {
+    recruiterCoverage,
+    totalEligible,
+    totalAIInterviews,
+    overallPercentage
+  };
+}
+
+/**
+ * Test function to debug AI coverage calculation
+ */
+function testAICoverageCalculation() {
+  try {
+    Logger.log(`--- Testing AI Coverage Calculation ---`);
+    Logger.log(`Filter: Application_ts ≥ May 1st, 2025`);
+    
+    // Get application data
+    const appData = getApplicationDataForChartRB();
+    if (!appData || !appData.rows) {
+      Logger.log(`ERROR: Could not get application data`);
+      return;
+    }
+    
+    Logger.log(`Got ${appData.rows.length} rows from application sheet`);
+    Logger.log(`Column indices: ${JSON.stringify(appData.colIndices)}`);
+    
+    // Test AI coverage calculation
+    const aiCoverageMetrics = calculateAICoverageMetricsRB(appData.rows, appData.colIndices);
+    
+    if (aiCoverageMetrics) {
+      Logger.log(`SUCCESS: AI Coverage metrics calculated`);
+      Logger.log(`Total eligible: ${aiCoverageMetrics.totalEligible}`);
+      Logger.log(`Total AI interviews: ${aiCoverageMetrics.totalAIInterviews}`);
+      Logger.log(`Overall percentage: ${aiCoverageMetrics.overallPercentage}%`);
+      Logger.log(`Recruiter coverage: ${JSON.stringify(aiCoverageMetrics.recruiterCoverage)}`);
+    } else {
+      Logger.log(`ERROR: AI Coverage metrics returned null`);
+    }
+    
+  } catch (error) {
+    Logger.log(`ERROR in test: ${error.toString()}`);
+  }
+}
+
+/**
+ * Generates HTML for a bar chart showing AI interview coverage by recruiter.
+ * Each bar represents a recruiter with Y (AI interview done) and N (AI interview missing) stacked.
+ * @param {object} aiCoverageMetrics The AI coverage metrics object from calculateAICoverageMetricsRB.
+ * @returns {string} HTML string for the bar chart.
+ */
+function generateAICoverageBarChartHtml(aiCoverageMetrics) {
+  if (!aiCoverageMetrics || !aiCoverageMetrics.recruiterCoverage || Object.keys(aiCoverageMetrics.recruiterCoverage).length === 0) {
+    return `
+      <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+        <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📊 AI Interview Coverage by Recruiter (Bar Chart)</div>
+        <div style="text-align: center; padding: 20px; color: #666; font-size: 14px;">No AI coverage data available or no eligible candidates found.</div>
+      </div>
+    `;
+  }
+
+  // Sort recruiters by total eligible candidates (descending)
+  const sortedRecruiters = Object.entries(aiCoverageMetrics.recruiterCoverage)
+    .sort(([, a], [, b]) => b.totalEligible - a.totalEligible);
+
+  // Calculate max value for scaling
+  const maxEligible = Math.max(...sortedRecruiters.map(([, data]) => data.totalEligible));
+
+  let chartHtml = `
+    <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+      <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📊 AI Interview Coverage by Recruiter (Bar Chart)</div>
+      <p style="font-size: 12px; color: #666; margin-bottom: 15px;">
+        Shows eligible candidates (in specific stages: Hiring Manager Screen, Assessment, Onsite Interview, Final Interview, Offer Approvals, Offer Extended, Offer Declined, Pending Start, Hired; Application_ts ≥ May 1st, 2025) by recruiter. 
+        <span style="color: #4CAF50; font-weight: bold;">Green</span> = AI interview done (Y), 
+        <span style="color: #F44336; font-weight: bold;">Red</span> = AI interview missing (N).
+      </p>
+      
+      <div style="margin: 20px 0;">
+  `;
+
+  // Generate bars
+  sortedRecruiters.forEach(([recruiter, data]) => {
+    const totalEligible = data.totalEligible;
+    const aiInterviewsDone = data.totalAIInterviews;
+    const aiInterviewsMissing = totalEligible - aiInterviewsDone;
+    
+    // Calculate bar widths (max width 300px)
+    const maxBarWidth = 300;
+    const barWidth = (totalEligible / maxEligible) * maxBarWidth;
+    const doneWidth = (aiInterviewsDone / totalEligible) * barWidth;
+    const missingWidth = (aiInterviewsMissing / totalEligible) * barWidth;
+    
+    // Truncate long recruiter names
+    const displayName = recruiter.length > 20 ? recruiter.substring(0, 17) + '...' : recruiter;
+    
+    chartHtml += `
+      <div style="margin-bottom: 15px;">
+        <div style="display: flex; align-items: center; margin-bottom: 5px;">
+          <div style="width: 120px; font-size: 12px; font-weight: bold; text-align: right; padding-right: 10px; overflow: hidden; text-overflow: ellipsis;" title="${recruiter}">
+            ${displayName}
+          </div>
+          <div style="flex: 1; display: flex; align-items: center;">
+            <div style="width: ${barWidth}px; height: 25px; display: flex; border: 1px solid #ccc; border-radius: 3px; overflow: hidden;">
+              ${aiInterviewsDone > 0 ? `<div style="width: ${doneWidth}px; background-color: #4CAF50; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold;" title="AI Interview Done: ${aiInterviewsDone}">${aiInterviewsDone}</div>` : ''}
+              ${aiInterviewsMissing > 0 ? `<div style="width: ${missingWidth}px; background-color: #F44336; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold;" title="AI Interview Missing: ${aiInterviewsMissing}">${aiInterviewsMissing}</div>` : ''}
+            </div>
+            <div style="margin-left: 10px; font-size: 11px; color: #666; min-width: 80px;">
+              ${data.percentage}% (${aiInterviewsDone}/${totalEligible})
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+
+  // Add legend
+  chartHtml += `
+      </div>
+      
+      <div style="display: flex; justify-content: center; align-items: center; margin-top: 20px; font-size: 12px;">
+        <div style="display: flex; align-items: center; margin-right: 20px;">
+          <div style="width: 20px; height: 15px; background-color: #4CAF50; margin-right: 8px; border: 1px solid #ccc;"></div>
+          <span>AI Interview Done (Y)</span>
+        </div>
+        <div style="display: flex; align-items: center;">
+          <div style="width: 20px; height: 15px; background-color: #F44336; margin-right: 8px; border: 1px solid #ccc;"></div>
+          <span>AI Interview Missing (N)</span>
+        </div>
+      </div>
+      
+      <p style="font-size: 11px; color: #666; margin-top: 15px; text-align: center;">
+        Total eligible candidates: ${aiCoverageMetrics.totalEligible} | 
+        Total AI interviews done: ${aiCoverageMetrics.totalAIInterviews} | 
+        Overall coverage: <strong>${aiCoverageMetrics.overallPercentage}%</strong>
+      </p>
+    </div>
+  `;
+
+  return chartHtml;
+}
+
+/**
+ * Test function to debug AI coverage bar chart
+ */
+function testAICoverageBarChart() {
+  try {
+    Logger.log(`--- Testing AI Coverage Bar Chart ---`);
+    
+    // Get application data
+    const appData = getApplicationDataForChartRB();
+    if (!appData || !appData.rows) {
+      Logger.log(`ERROR: Could not get application data`);
+      return;
+    }
+    
+    Logger.log(`Got ${appData.rows.length} rows from application sheet`);
+    
+    // Test AI coverage calculation
+    const aiCoverageMetrics = calculateAICoverageMetricsRB(appData.rows, appData.colIndices);
+    
+    if (aiCoverageMetrics) {
+      Logger.log(`SUCCESS: AI Coverage metrics calculated`);
+      Logger.log(`Total eligible: ${aiCoverageMetrics.totalEligible}`);
+      Logger.log(`Total AI interviews: ${aiCoverageMetrics.totalAIInterviews}`);
+      Logger.log(`Overall percentage: ${aiCoverageMetrics.overallPercentage}%`);
+      
+      // Test bar chart generation
+      const barChartHtml = generateAICoverageBarChartHtml(aiCoverageMetrics);
+      Logger.log(`SUCCESS: Bar chart HTML generated (${barChartHtml.length} characters)`);
+      
+      // Log sample of the HTML
+      Logger.log(`Sample HTML (first 500 chars): ${barChartHtml.substring(0, 500)}...`);
+      
+      // Log recruiter data for verification
+      Object.entries(aiCoverageMetrics.recruiterCoverage).forEach(([recruiter, data]) => {
+        const missing = data.totalEligible - data.totalAIInterviews;
+        Logger.log(`Recruiter: ${recruiter} | Eligible: ${data.totalEligible} | AI Done: ${data.totalAIInterviews} | Missing: ${missing} | %: ${data.percentage}%`);
+      });
+      
+    } else {
+      Logger.log(`ERROR: AI Coverage metrics returned null`);
+    }
+    
+  } catch (error) {
+    Logger.log(`ERROR in test: ${error.toString()}`);
+  }
+}
+
+/**
+ * Creates a detailed validation spreadsheet for a specific recruiter showing all their candidates.
+ * @param {string} recruiterName The name of the recruiter to analyze.
+ * @param {Array<Array>} appRows Raw rows from the application sheet.
+ * @param {object} appColIndices Column indices map for the application sheet.
+ * @returns {string} The URL of the created Google Sheet.
+ */
+function createRecruiterValidationSheet(recruiterName, appRows, appColIndices) {
+  Logger.log(`--- Creating validation sheet for recruiter: ${recruiterName} ---`);
+  
+  try {
+    const spreadsheet = SpreadsheetApp.create(`AI Interview Validation - ${recruiterName} - ${new Date().toISOString().split('T')[0]}`);
+    const sheet = spreadsheet.getActiveSheet();
+    
+    // Set May 1st, 2025 as the cutoff date
+    const mayFirst2025 = new Date('2025-05-01');
+    mayFirst2025.setHours(0, 0, 0, 0);
+    
+    // Find column indices
+    const findColumnIndex = (possibleNames) => {
+      for (const name of possibleNames) {
+        if (appColIndices[name] !== undefined && appColIndices[name] !== -1) {
+          return appColIndices[name];
+        }
+      }
+      return -1;
+    };
+    
+    const recruiterNameIdx = findColumnIndex(['Recruiter name', 'Recruiter_name', 'RecruiterName', 'recruiter name', 'recruiter_name']);
+    const lastStageIdx = findColumnIndex(['Last_stage', 'Last stage', 'LastStage', 'last_stage', 'last stage']);
+    const aiInterviewIdx = findColumnIndex(['Ai_interview', 'AI_interview', 'AI Interview', 'ai_interview', 'ai interview']);
+    const applicationTsIdx = findColumnIndex(['Application_ts', 'Application ts', 'ApplicationTs', 'application_ts']);
+    const nameIdx = findColumnIndex(['Name', 'name', 'Candidate_name', 'Candidate name']);
+    const positionIdIdx = findColumnIndex(['Position_id', 'Position id', 'Position ID']);
+    const titleIdx = findColumnIndex(['Title', 'title', 'Position_title', 'Position title']);
+    const currentCompanyIdx = findColumnIndex(['Current_company', 'Current company', 'Company', 'company']);
+    const applicationStatusIdx = findColumnIndex(['Application_status', 'Application status', 'Status', 'status']);
+    const positionStatusIdx = findColumnIndex(['Position_status', 'Position status']);
+    const matchStarsIdx = findColumnIndex(['Match_stars', 'Match score', 'Match Stars', 'MatchStars', 'Match_Stars', 'Stars', 'Score']);
+    
+    if (recruiterNameIdx === -1 || lastStageIdx === -1 || aiInterviewIdx === -1) {
+      throw new Error('Required columns not found for validation sheet');
+    }
+    
+    // Define headers for the validation sheet
+    const headers = [
+      'Candidate Name',
+      'Position ID', 
+      'Position Title',
+      'Current Company',
+      'Application Status',
+      'Position Status',
+      'Last Stage',
+      'Application Timestamp',
+      'AI Interview (Y/N)',
+      'Match Stars/Score',
+      'Eligible for AI Interview',
+      'AI Interview Status',
+      'Days Since Application'
+    ];
+    
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    
+    // Filter data for the specific recruiter and apply date filter
+    const recruiterData = appRows.filter(row => {
+      if (!row || row.length <= Math.max(recruiterNameIdx, lastStageIdx, aiInterviewIdx)) {
+        return false;
+      }
+      
+      const rowRecruiterName = String(row[recruiterNameIdx] || '').trim();
+      if (rowRecruiterName !== recruiterName) {
+        return false;
+      }
+      
+      // Check Application_ts filter (May 1st, 2025 or later)
+      const applicationTs = applicationTsIdx !== -1 ? vsParseDateSafeRB(row[applicationTsIdx]) : null;
+      if (!applicationTs || applicationTs < mayFirst2025) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    Logger.log(`Found ${recruiterData.length} candidates for ${recruiterName} with Application_ts ≥ May 1st, 2025`);
+    
+    // Process each candidate
+    const validationRows = recruiterData.map(row => {
+      const lastStage = String(row[lastStageIdx] || '').trim().toUpperCase();
+      const aiInterview = String(row[aiInterviewIdx] || '').trim().toUpperCase();
+      const applicationTs = applicationTsIdx !== -1 ? vsParseDateSafeRB(row[applicationTsIdx]) : null;
+      
+      // Check if candidate is eligible (only specific stages) - CASE INSENSITIVE
+      const eligibleStages = [
+        'HIRING MANAGER SCREEN',
+        'ASSESSMENT', 
+        'ONSITE INTERVIEW',
+        'FINAL INTERVIEW',
+        'OFFER APPROVALS',
+        'OFFER EXTENDED',
+        'OFFER DECLINED',
+        'PENDING START',
+        'HIRED'
+      ];
+      const isEligible = eligibleStages.some(stage => stage.toUpperCase() === lastStage);
+      
+      // Determine AI interview status
+      let aiInterviewStatus = 'N/A';
+      if (isEligible) {
+        if (aiInterview === 'Y') {
+          aiInterviewStatus = '✅ AI Interview Done';
+        } else if (aiInterview === 'N') {
+          aiInterviewStatus = '❌ AI Interview Missing';
+        } else {
+          aiInterviewStatus = '❓ Unknown Status';
+        }
+      } else {
+        aiInterviewStatus = '⏭️ Not Eligible (Not in target stages)';
+      }
+      
+      // Calculate days since application
+      const daysSinceApplication = applicationTs ? 
+        Math.floor((new Date() - applicationTs) / (1000 * 60 * 60 * 24)) : 'N/A';
+      
+      return [
+        nameIdx !== -1 ? row[nameIdx] || 'N/A' : 'N/A',
+        positionIdIdx !== -1 ? row[positionIdIdx] || 'N/A' : 'N/A',
+        titleIdx !== -1 ? row[titleIdx] || 'N/A' : 'N/A',
+        currentCompanyIdx !== -1 ? row[currentCompanyIdx] || 'N/A' : 'N/A',
+        applicationStatusIdx !== -1 ? row[applicationStatusIdx] || 'N/A' : 'N/A',
+        positionStatusIdx !== -1 ? row[positionStatusIdx] || 'N/A' : 'N/A',
+        lastStage,
+        applicationTs ? applicationTs.toLocaleDateString() : 'N/A',
+        aiInterview,
+        matchStarsIdx !== -1 ? row[matchStarsIdx] || 'N/A' : 'N/A',
+        isEligible ? 'Yes' : 'No',
+        aiInterviewStatus,
+        daysSinceApplication
+      ];
+    });
+    
+    // Sort by AI interview status (missing first, then done, then not eligible)
+    validationRows.sort((a, b) => {
+      const statusA = a[11]; // AI Interview Status column
+      const statusB = b[11];
+      
+      if (statusA.includes('Missing') && !statusB.includes('Missing')) return -1;
+      if (!statusA.includes('Missing') && statusB.includes('Missing')) return 1;
+      if (statusA.includes('Done') && !statusB.includes('Done')) return -1;
+      if (!statusA.includes('Done') && statusB.includes('Done')) return 1;
+      return 0;
+    });
+    
+    if (validationRows.length > 0) {
+      sheet.getRange(2, 1, validationRows.length, headers.length).setValues(validationRows);
+    }
+    
+    // Auto-resize columns
+    sheet.autoResizeColumns(1, headers.length);
+    
+    // Add summary statistics
+    const totalCandidates = validationRows.length;
+    const eligibleCandidates = validationRows.filter(row => row[10] === 'Yes').length;
+    const aiInterviewsDone = validationRows.filter(row => row[11].includes('Done')).length;
+    const aiInterviewsMissing = validationRows.filter(row => row[11].includes('Missing')).length;
+    const notEligible = validationRows.filter(row => row[11].includes('Not Eligible')).length;
+    
+    // Add summary at the top
+    const summaryRow = [
+      `SUMMARY FOR ${recruiterName.toUpperCase()}`,
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      ''
+    ];
+    sheet.insertRowBefore(1);
+    sheet.getRange(1, 1, 1, headers.length).setValues([summaryRow]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e3f2fd');
+    
+    // Add statistics rows
+    const statsRows = [
+      [`Total Candidates (Application_ts ≥ May 1st, 2025): ${totalCandidates}`],
+      [`Eligible Candidates (in target stages): ${eligibleCandidates}`],
+      [`AI Interviews Done: ${aiInterviewsDone}`],
+      [`AI Interviews Missing: ${aiInterviewsMissing}`],
+      [`Not Eligible (not in target stages): ${notEligible}`],
+      [`Coverage Rate: ${eligibleCandidates > 0 ? ((aiInterviewsDone / eligibleCandidates) * 100).toFixed(1) : 0}%`]
+    ];
+    
+    sheet.insertRowsBefore(2, statsRows.length);
+    for (let i = 0; i < statsRows.length; i++) {
+      sheet.getRange(2 + i, 1, 1, 1).setValues([statsRows[i]]);
+      sheet.getRange(2 + i, 1, 1, 1).setFontWeight('bold');
+    }
+    
+    // Add conditional formatting for AI interview status
+    const statusRange = sheet.getRange(3 + statsRows.length, 12, validationRows.length, 1); // AI Interview Status column
+    const rule1 = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('✅ AI Interview Done')
+      .setBackground('#d4edda')
+      .setRanges([statusRange])
+      .build();
+    
+    const rule2 = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('❌ AI Interview Missing')
+      .setBackground('#f8d7da')
+      .setRanges([statusRange])
+      .build();
+    
+    const rule3 = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('⏭️ Not Eligible (New/Added)')
+      .setBackground('#fff3cd')
+      .setRanges([statusRange])
+      .build();
+    
+    sheet.setConditionalFormatRules([rule1, rule2, rule3]);
+    
+    Logger.log(`Validation sheet created for ${recruiterName} with ${validationRows.length} candidates`);
+    Logger.log(`Summary: ${eligibleCandidates} eligible, ${aiInterviewsDone} AI done, ${aiInterviewsMissing} AI missing`);
+    
+    return spreadsheet.getUrl();
+    
+  } catch (error) {
+    Logger.log(`Error creating validation sheet for ${recruiterName}: ${error.toString()} Stack: ${error.stack}`);
+    throw error;
+  }
+}
+
+/**
+ * Test function to create validation sheet for a specific recruiter
+ */
+function testCreateRecruiterValidationSheet() {
+  try {
+    Logger.log(`--- Testing Recruiter Validation Sheet Creation ---`);
+    
+    // Get application data
+    const appData = getApplicationDataForChartRB();
+    if (!appData || !appData.rows) {
+      Logger.log(`ERROR: Could not get application data`);
+      return;
+    }
+    
+    Logger.log(`Got ${appData.rows.length} rows from application sheet`);
+    
+    // Test with a specific recruiter (you can change this name)
+    const testRecruiter = 'Akhila Kashyap';
+    Logger.log(`Creating validation sheet for: ${testRecruiter}`);
+    
+    const sheetUrl = createRecruiterValidationSheet(testRecruiter, appData.rows, appData.colIndices);
+    Logger.log(`SUCCESS: Validation sheet created: ${sheetUrl}`);
+    
+  } catch (error) {
+    Logger.log(`ERROR in test: ${error.toString()}`);
+  }
+}
+
+/**
+ * Creates validation sheets for all recruiters and returns a summary of URLs.
+ * @param {Array<Array>} appRows Raw rows from the application sheet.
+ * @param {object} appColIndices Column indices map for the application sheet.
+ * @returns {object} Object containing validation sheet URLs and summary.
+ */
+function createAllRecruiterValidationSheets(appRows, appColIndices) {
+  Logger.log(`--- Creating validation sheets for all recruiters ---`);
+  
+  try {
+    // First, get the list of all recruiters from the AI coverage data
+    const aiCoverageMetrics = calculateAICoverageMetricsRB(appRows, appColIndices);
+    if (!aiCoverageMetrics || !aiCoverageMetrics.recruiterCoverage) {
+      Logger.log(`ERROR: Could not calculate AI coverage metrics`);
+      return null;
+    }
+    
+    const recruiterNames = Object.keys(aiCoverageMetrics.recruiterCoverage);
+    Logger.log(`Found ${recruiterNames.length} recruiters to create validation sheets for`);
+    
+    const validationSheets = {};
+    const failedRecruiters = [];
+    
+    // Create validation sheet for each recruiter
+    recruiterNames.forEach(recruiterName => {
+      try {
+        Logger.log(`Creating validation sheet for: ${recruiterName}`);
+        const sheetUrl = createRecruiterValidationSheet(recruiterName, appRows, appColIndices);
+        validationSheets[recruiterName] = {
+          url: sheetUrl,
+          eligible: aiCoverageMetrics.recruiterCoverage[recruiterName].totalEligible,
+          aiDone: aiCoverageMetrics.recruiterCoverage[recruiterName].totalAIInterviews,
+          aiMissing: aiCoverageMetrics.recruiterCoverage[recruiterName].totalEligible - aiCoverageMetrics.recruiterCoverage[recruiterName].totalAIInterviews,
+          percentage: aiCoverageMetrics.recruiterCoverage[recruiterName].percentage
+        };
+        Logger.log(`SUCCESS: Validation sheet created for ${recruiterName}`);
+      } catch (error) {
+        Logger.log(`ERROR creating validation sheet for ${recruiterName}: ${error.toString()}`);
+        failedRecruiters.push(recruiterName);
+      }
+    });
+    
+    Logger.log(`Created ${Object.keys(validationSheets).length} validation sheets successfully`);
+    if (failedRecruiters.length > 0) {
+      Logger.log(`Failed to create sheets for: ${failedRecruiters.join(', ')}`);
+    }
+    
+    return {
+      validationSheets,
+      failedRecruiters,
+      totalRecruiters: recruiterNames.length,
+      successfulSheets: Object.keys(validationSheets).length
+    };
+    
+  } catch (error) {
+    Logger.log(`ERROR in createAllRecruiterValidationSheets: ${error.toString()} Stack: ${error.stack}`);
+    return null;
+  }
+}
+
+/**
+ * Generates HTML for validation sheets section in the report.
+ * @param {object} validationData The validation data from createAllRecruiterValidationSheets.
+ * @returns {string} HTML string for the validation sheets section.
+ */
+function generateValidationSheetsHtml(validationData) {
+  if (!validationData || !validationData.validationSheets || Object.keys(validationData.validationSheets).length === 0) {
+    return `
+      <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+        <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📋 Detailed Validation Sheets</div>
+        <div style="text-align: center; padding: 20px; color: #666; font-size: 14px;">No validation sheets available.</div>
+      </div>
+    `;
+  }
+  
+  // Sort recruiters by AI interviews missing (descending) to highlight those needing attention
+  const sortedRecruiters = Object.entries(validationData.validationSheets)
+    .sort(([, a], [, b]) => b.aiMissing - a.aiMissing);
+  
+  let html = `
+    <div style="background-color: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px;">
+      <div style="font-weight: bold; font-size: 16px; color: #3f51b5; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #eee;">📋 Detailed Validation Sheets</div>
+      <p style="font-size: 12px; color: #666; margin-bottom: 15px;">
+        Click on any recruiter name to view their detailed candidate list with AI interview status. 
+        Sheets show all candidates with Application_ts ≥ May 1st, 2025, sorted by AI interview status.
+      </p>
+      
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden;">
+        <thead>
+          <tr>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">Recruiter Name</th>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">Eligible Candidates</th>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">AI Done</th>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">AI Missing</th>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">Coverage %</th>
+            <th style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; background-color: #f5f5f5; color: #424242; font-weight: bold;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+  
+  sortedRecruiters.forEach(([recruiterName, data], index) => {
+    const bgColor = index % 2 === 0 ? '#fafafa' : '#ffffff';
+    const coverageColor = data.percentage >= 80 ? '#4CAF50' : data.percentage >= 60 ? '#FF9800' : '#F44336';
+    const missingPercentage = 100 - data.percentage;
+    const priorityIcon = missingPercentage > 30 ? '🔴' : missingPercentage > 10 ? '🟡' : '🟢';
+    
+    html += `
+      <tr style="background-color: ${bgColor};">
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px; font-weight: bold;">
+          ${priorityIcon} ${recruiterName}
+        </td>
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px;">${data.eligible}</td>
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; color: #4CAF50; font-weight: bold;">${data.aiDone}</td>
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; color: #F44336; font-weight: bold;">${data.aiMissing}</td>
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px; color: ${coverageColor}; font-weight: bold;">${data.percentage}%</td>
+        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: center; font-size: 12px;">
+          <a href="${data.url}" target="_blank" style="color: #1976d2; text-decoration: none; font-weight: bold;">📊 View Details</a>
+        </td>
+      </tr>
+    `;
+  });
+  
+  html += `
+        </tbody>
+      </table>
+      
+      <p style="font-size: 11px; color: #666; margin-top: 15px; text-align: center;">
+        🔴 High Priority (>30% missing) | 🟡 Medium Priority (10-30% missing) | 🟢 Low Priority (<10% missing)<br>
+        Created ${validationData.successfulSheets} validation sheets successfully.
+        ${validationData.failedRecruiters.length > 0 ? `Failed to create sheets for: ${validationData.failedRecruiters.join(', ')}` : ''}
+      </p>
+    </div>
+  `;
+  
+  return html;
+}
+
+/**
+ * Comprehensive test function for validation sheet functionality
+ */
+function testValidationSheetFunctionality() {
+  try {
+    Logger.log(`--- Testing Complete Validation Sheet Functionality ---`);
+    
+    // Get application data
+    const appData = getApplicationDataForChartRB();
+    if (!appData || !appData.rows) {
+      Logger.log(`ERROR: Could not get application data`);
+      return;
+    }
+    
+    Logger.log(`Got ${appData.rows.length} rows from application sheet`);
+    
+    // Test 1: Single recruiter validation sheet
+    Logger.log(`\n--- Test 1: Single Recruiter Validation Sheet ---`);
+    const testRecruiter = 'Akhila Kashyap';
+    const singleSheetUrl = createRecruiterValidationSheet(testRecruiter, appData.rows, appData.colIndices);
+    Logger.log(`SUCCESS: Single validation sheet created for ${testRecruiter}: ${singleSheetUrl}`);
+    
+    // Test 2: All recruiters validation sheets
+    Logger.log(`\n--- Test 2: All Recruiters Validation Sheets ---`);
+    const allSheetsData = createAllRecruiterValidationSheets(appData.rows, appData.colIndices);
+    if (allSheetsData) {
+      Logger.log(`SUCCESS: Created ${allSheetsData.successfulSheets} validation sheets out of ${allSheetsData.totalRecruiters} recruiters`);
+      Logger.log(`Failed recruiters: ${allSheetsData.failedRecruiters.length > 0 ? allSheetsData.failedRecruiters.join(', ') : 'None'}`);
+      
+      // Log details for each recruiter
+      Object.entries(allSheetsData.validationSheets).forEach(([recruiter, data]) => {
+        Logger.log(`${recruiter}: ${data.eligible} eligible, ${data.aiDone} AI done, ${data.aiMissing} AI missing, ${data.percentage}% coverage`);
+      });
+    } else {
+      Logger.log(`ERROR: Could not create all recruiter validation sheets`);
+    }
+    
+    // Test 3: HTML generation
+    Logger.log(`\n--- Test 3: HTML Generation ---`);
+    if (allSheetsData) {
+      const htmlContent = generateValidationSheetsHtml(allSheetsData);
+      Logger.log(`SUCCESS: Generated HTML content (${htmlContent.length} characters)`);
+      Logger.log(`HTML preview (first 500 chars): ${htmlContent.substring(0, 500)}...`);
+    }
+    
+    Logger.log(`\n--- All Validation Sheet Tests Completed Successfully ---`);
+    
+  } catch (error) {
+    Logger.log(`ERROR in comprehensive test: ${error.toString()}`);
+  }
+}
+
+/**
+ * Detailed debug function to analyze Akhila's data and understand the filtering issue
+ */
+function debugAkhilaData() {
+  try {
+    Logger.log(`=== DETAILED DEBUG: AKHILA'S DATA ===`);
+    
+    // Get application data
+    const appData = getApplicationDataForChartRB();
+    if (!appData || !appData.rows) {
+      Logger.log(`ERROR: Could not get application data`);
+      return;
+    }
+    
+    Logger.log(`Total rows in dataset: ${appData.rows.length}`);
+    Logger.log(`Column indices: ${JSON.stringify(appData.colIndices)}`);
+    
+    const { rows, colIndices } = appData;
+    const { recruiterNameIdx, lastStageIdx, aiInterviewIdx, applicationTsIdx } = colIndices;
+    
+    // Set May 1st, 2025 as the cutoff date
+    const mayFirst2025 = new Date('2025-05-01');
+    mayFirst2025.setHours(0, 0, 0, 0);
+    
+    // Define eligible stages
+    const eligibleStages = [
+      'HIRING MANAGER SCREEN',
+      'ASSESSMENT', 
+      'ONSITE INTERVIEW',
+      'FINAL INTERVIEW',
+      'OFFER APPROVALS',
+      'OFFER EXTENDED',
+      'OFFER DECLINED',
+      'PENDING START',
+      'HIRED'
+    ];
+    
+    // Track Akhila's data specifically
+    let akhilaTotal = 0;
+    let akhilaAfterMay1st = 0;
+    let akhilaEligible = 0;
+    let akhilaStages = {};
+    let akhilaApplicationDates = [];
+    
+    // Analyze all rows for Akhila
+    rows.forEach((row, index) => {
+      const recruiterName = String(row[recruiterNameIdx] || '').trim();
+      
+      // Only process Akhila's data
+      if (recruiterName.toLowerCase().includes('akhila')) {
+        akhilaTotal++;
+        
+        const lastStage = String(row[lastStageIdx] || '').trim().toUpperCase();
+        const aiInterview = String(row[aiInterviewIdx] || '').trim().toUpperCase();
+        const applicationTs = applicationTsIdx !== -1 ? vsParseDateSafeRB(row[applicationTsIdx]) : null;
+        
+        // Track stages
+        if (!akhilaStages[lastStage]) {
+          akhilaStages[lastStage] = 0;
+        }
+        akhilaStages[lastStage]++;
+        
+        // Check Application_ts filter
+        if (applicationTs && applicationTs >= mayFirst2025) {
+          akhilaAfterMay1st++;
+          akhilaApplicationDates.push(applicationTs.toISOString().split('T')[0]);
+          
+          // Check if eligible stage (case insensitive)
+          if (eligibleStages.some(stage => stage.toUpperCase() === lastStage)) {
+            akhilaEligible++;
+            Logger.log(`AKHILA ELIGIBLE: Row ${index}, Stage: "${lastStage}", AI: "${aiInterview}", Date: ${applicationTs.toISOString().split('T')[0]}`);
+          } else {
+            Logger.log(`AKHILA NOT ELIGIBLE: Row ${index}, Stage: "${lastStage}", AI: "${aiInterview}", Date: ${applicationTs.toISOString().split('T')[0]}`);
+          }
+        } else {
+          Logger.log(`AKHILA BEFORE MAY 1ST: Row ${index}, Stage: "${lastStage}", AI: "${aiInterview}", Date: ${applicationTs ? applicationTs.toISOString().split('T')[0] : 'N/A'}`);
+        }
+      }
+    });
+    
+    Logger.log(`=== AKHILA SUMMARY ===`);
+    Logger.log(`Total Akhila candidates: ${akhilaTotal}`);
+    Logger.log(`Akhila candidates after May 1st, 2025: ${akhilaAfterMay1st}`);
+    Logger.log(`Akhila eligible candidates: ${akhilaEligible}`);
+    Logger.log(`Akhila stages breakdown: ${JSON.stringify(akhilaStages)}`);
+    Logger.log(`Akhila application dates (after May 1st): ${akhilaApplicationDates.slice(0, 10).join(', ')}...`);
+    
+    // Also check for variations of Akhila's name
+    Logger.log(`=== CHECKING FOR NAME VARIATIONS ===`);
+    const nameVariations = {};
+    rows.forEach((row, index) => {
+      const recruiterName = String(row[recruiterNameIdx] || '').trim();
+      if (recruiterName.toLowerCase().includes('akhila') || recruiterName.toLowerCase().includes('kashyap')) {
+        if (!nameVariations[recruiterName]) {
+          nameVariations[recruiterName] = 0;
+        }
+        nameVariations[recruiterName]++;
+      }
+    });
+    Logger.log(`Name variations found: ${JSON.stringify(nameVariations)}`);
+    
+  } catch (error) {
+    Logger.log(`ERROR in debugAkhilaData: ${error.toString()}`);
+  }
+}
+
+/**
+ * Function to list all current filters being applied in AI coverage calculation
+ */
+function listCurrentFilters() {
+  Logger.log(`=== CURRENT FILTERS IN AI COVERAGE CALCULATION ===`);
+  Logger.log(`1. Application_ts filter: Must be ≥ May 1st, 2025`);
+  Logger.log(`2. Last_stage filter: Must be one of the following:`);
+  Logger.log(`   - HIRING MANAGER SCREEN`);
+  Logger.log(`   - ASSESSMENT`);
+  Logger.log(`   - ONSITE INTERVIEW`);
+  Logger.log(`   - FINAL INTERVIEW`);
+  Logger.log(`   - OFFER APPROVALS`);
+  Logger.log(`   - OFFER EXTENDED`);
+  Logger.log(`   - OFFER DECLINED`);
+  Logger.log(`   - PENDING START`);
+  Logger.log(`   - HIRED`);
+  Logger.log(`3. Recruiter name must not be empty`);
+  Logger.log(`4. All required columns must have data (recruiter, last stage, AI interview, application timestamp)`);
+  Logger.log(`5. Excluded recruiters: Samrudh J, Pavan Kumar, Guruprasad Hegde`);
+  Logger.log(`=== END OF FILTERS ===`);
 }

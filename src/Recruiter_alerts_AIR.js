@@ -697,7 +697,7 @@ function createAdminDigestEmailHtml(allAlertCandidates, colIndices) {
       <p>This digest lists all candidates whose AI screening feedback is marked '${ALERT_FEEDBACK_AI_RECOMMENDED}' and has been awaiting review for more than ${ALERT_DAYS_THRESHOLD} day(s) but less than or equal to ${ALERT_STOP_DAYS_THRESHOLD} days.</p>
 
       <h3>Summary by Recruiter</h3>
-      <table style="width: auto; margin-bottom: 25px;"> <!-- Adjusted width and margin -->
+      <table style="width: 100%; margin-bottom: 25px;"> <!-- Fixed to use full width -->
         <thead>
           <tr>
             <th style="border: 1px solid #ddd; padding: 8px 10px; background-color: #f5f5f5; font-weight: bold; text-transform: uppercase; font-size: 11px; color: #555; text-align: left;">Recruiter Email</th>
