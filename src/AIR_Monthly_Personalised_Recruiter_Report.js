@@ -1,9 +1,9 @@
 /**
- * AIR Weekly Personalised Recruiter Reports
- * Sends personalized weekly reports to each recruiter with their AI interview usage data
+ * AIR Monthly Personalised Recruiter Reports
+ * Sends personalized monthly reports to each recruiter with their AI interview usage data
  * 
  * Last Updated: 2025-08-11 10:21 AM IST
- * Changes: Initial creation of weekly personalised recruiter reports script
+ * Changes: Modified to send reports monthly with 30-day recent data
  */
 
 // --- Configuration ---
@@ -18,7 +18,7 @@ const WEEKLY_REPORTS_CONFIG = {
   
   // Date Filters
   HISTORICAL_CUTOFF_DATE: new Date('2025-05-01'), // May 1st, 2025 for historical data
-  RECENT_DAYS: 14, // Last 14 days for recent data
+  RECENT_DAYS: 30, // Last 30 days for recent data
   
   // Eligible stages for AI interview analysis
   ELIGIBLE_STAGES: [
@@ -38,12 +38,12 @@ const WEEKLY_REPORTS_CONFIG = {
 };
 
 /**
- * Main function to generate and send weekly recruiter reports
- * This function should be scheduled to run weekly
+ * Main function to generate and send monthly personalised recruiter reports
+ * This function should be scheduled to run monthly
  */
-function generateWeeklyRecruiterReports() {
+function generateMonthlyPersonalisedRecruiterReports() {
   try {
-    Logger.log('=== Starting Weekly Personalised Recruiter Reports Generation ===');
+    Logger.log('=== Starting Monthly Personalised Recruiter Reports Generation ===');
     
     // Get application data
     const appData = getApplicationDataForWeeklyReports();
@@ -80,7 +80,7 @@ function generateWeeklyRecruiterReports() {
         const reportHtml = generateRecruiterReportHtml(recruiterName, metrics);
         
         // Send email
-        const emailSubject = `${WEEKLY_REPORTS_CONFIG.COMPANY_NAME} AI Interview Usage Report - ${recruiterName}`;
+        const emailSubject = `${WEEKLY_REPORTS_CONFIG.COMPANY_NAME} AI Interview Usage Report - Monthly - ${recruiterName}`;
         const recipientEmail = getRecruiterEmail(recruiterName); // You'll need to implement this
         
         if (recipientEmail) {
@@ -98,7 +98,7 @@ function generateWeeklyRecruiterReports() {
       }
     });
     
-    Logger.log(`=== Weekly Personalised Reports Summary ===`);
+    Logger.log(`=== Monthly Personalised Reports Summary ===`);
     Logger.log(`Successfully sent: ${successCount} reports`);
     Logger.log(`Failed to send: ${failureCount} reports`);
     Logger.log(`Total recruiters processed: ${Object.keys(recruiterMetrics).length}`);
@@ -114,7 +114,7 @@ function generateWeeklyRecruiterReports() {
  * @returns {object} Object containing rows and column indices
  */
 function getApplicationDataForWeeklyReports() {
-  Logger.log('--- Getting Application Data for Weekly Reports ---');
+  Logger.log('--- Getting Application Data for Monthly Reports ---');
   
   try {
     const spreadsheet = SpreadsheetApp.openByUrl(WEEKLY_REPORTS_CONFIG.APP_SHEET_SPREADSHEET_URL);
@@ -317,7 +317,7 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
         <!-- Header -->
         <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #eee;">
           <h1 style="color: #1a237e; margin: 0; font-size: 28px;">AI Interview Usage Report</h1>
-          <p style="color: #666; margin: 10px 0 0 0; font-size: 16px;">Weekly Personalised Report for ${recruiterName}</p>
+          <p style="color: #666; margin: 10px 0 0 0; font-size: 16px;">Monthly Personalised Report for ${recruiterName}</p>
           <p style="color: #999; margin: 5px 0 0 0; font-size: 14px;">Generated on ${currentDate}</p>
         </div>
         
@@ -349,7 +349,7 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
                     ${metrics.recent.aiDone} of ${metrics.recent.eligible} eligible candidates
                   </div>
                   <div style="font-size: 12px; color: #999; margin-top: 5px;">
-                    Last ${WEEKLY_REPORTS_CONFIG.RECENT_DAYS} days
+                    Last 30 days
                   </div>
                 </div>
               </td>
@@ -409,7 +409,7 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
         
         <!-- Footer -->
         <div style="text-align: center; padding-top: 20px; border-top: 1px solid #eee; color: #999; font-size: 12px;">
-          <p>This personalised report is automatically generated weekly by the AI Interview System.</p>
+          <p>This personalised report is automatically generated monthly by the AI Interview System.</p>
           <p>Eligible stages: Hiring Manager Screen, Assessment, Onsite Interview, Final Interview, Offer stages, Hired</p>
           <p>For questions or support, please contact the AI Interview team.</p>
         </div>
@@ -501,35 +501,36 @@ function sendRecruiterReportEmail(recipientEmail, subject, htmlBody) {
 }
 
 /**
- * Creates a trigger to run weekly recruiter reports
- * Runs every Monday at 9 AM
+ * Creates a trigger to run monthly personalised recruiter reports
+ * Runs on the first Monday of each month at 9 AM
  */
-function createWeeklyRecruiterReportsTrigger() {
+function createMonthlyPersonalisedRecruiterReportsTrigger() {
   // Delete existing triggers for this function
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'generateWeeklyRecruiterReports') {
+    if (triggers[i].getHandlerFunction() === 'generateMonthlyPersonalisedRecruiterReports') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
   
-  // Create new trigger for every Monday at 9 AM
-  ScriptApp.newTrigger('generateWeeklyRecruiterReports')
+  // Create new trigger for the first Monday of each month at 9 AM
+  ScriptApp.newTrigger('generateMonthlyPersonalisedRecruiterReports')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
     .atHour(9)
+    .everyMonths(1) // Run every month
     .create();
     
-  Logger.log('Weekly personalised recruiter reports trigger created (Mondays at 9 AM)');
+  Logger.log('Monthly personalised recruiter reports trigger created (first Monday of each month at 9 AM)');
 }
 
 /**
- * Test function to generate a single recruiter report
+ * Test function to generate a single monthly personalised recruiter report
  * @param {string} testRecruiterName Name of recruiter to test with
  */
-function testSingleRecruiterReport(testRecruiterName = 'Akhila Kashyap') {
+function testSingleMonthlyPersonalisedRecruiterReport(testRecruiterName = 'Akhila Kashyap') {
   try {
-    Logger.log(`=== Testing Single Personalised Recruiter Report for: ${testRecruiterName} ===`);
+    Logger.log(`=== Testing Single Monthly Personalised Recruiter Report for: ${testRecruiterName} ===`);
     
     // Get application data
     const appData = getApplicationDataForWeeklyReports();
@@ -565,7 +566,7 @@ function testSingleRecruiterReport(testRecruiterName = 'Akhila Kashyap') {
       Logger.log(`ERROR: No email found for test recruiter: ${testRecruiterName}`);
     }
     
-    Logger.log(`SUCCESS: Personalised report generated for ${testRecruiterName}`);
+    Logger.log(`SUCCESS: Monthly personalised report generated for ${testRecruiterName}`);
     Logger.log(`HTML length: ${reportHtml.length} characters`);
     
   } catch (error) {
@@ -591,18 +592,4 @@ function vsParseDateSafeRB(dateInput) {
   return !isNaN(date.getTime()) ? date : null;
 }
 
-/**
- * Setup function to create menu items
- */
-function setupWeeklyReportsMenu() {
-  try {
-    SpreadsheetApp.getUi()
-      .createMenu('AI Weekly Personalised Reports')
-      .addItem('Generate All Reports Now', 'generateWeeklyRecruiterReports')
-      .addItem('Test Single Report', 'testSingleRecruiterReport')
-      .addItem('Schedule Weekly Reports (Mondays 9 AM)', 'createWeeklyRecruiterReportsTrigger')
-      .addToUi();
-  } catch (e) {
-    Logger.log("Error creating Weekly Personalised Reports menu: " + e);
-  }
-}
+
