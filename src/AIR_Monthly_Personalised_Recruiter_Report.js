@@ -454,6 +454,9 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
           <p style="color: #666; margin-bottom: 15px; font-size: 14px; text-align: center;">
             Showing eligible candidates since May 1st, 2025 (excluding "New" and "Added" stages) with their AI interview status.
           </p>
+          <p style="color: #666; margin-bottom: 15px; font-size: 12px; text-align: center; font-style: italic;">
+            <strong>Note:</strong> The number of days shown under "✅ Sent" indicates the time between when the candidate applied and when their AI interview invitation was sent. Lower numbers indicate faster response times.
+          </p>
           
           ${metrics.detailedData.length > 0 ? `
             <div style="overflow-x: auto;">
