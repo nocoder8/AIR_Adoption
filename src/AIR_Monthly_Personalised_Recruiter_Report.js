@@ -177,7 +177,7 @@ function getApplicationDataForWeeklyReports() {
     // Define required columns
     const requiredColumns = [
       'Recruiter name', 'Recruiter email', 'Last_stage', 'Ai_interview', 'Application_ts', 
-      'Name', 'Position_id', 'Title', 'Current_company', 'Application_status', 'Source_name', 'Profile_id'
+      'Name', 'Position_id', 'Title', 'Current_company', 'Application_status', 'Source_name', 'Profile_id', 'Profile_link'
     ];
     
     const colIndices = {};
@@ -297,6 +297,7 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
         
         metrics.detailedData.push({
           name: row[colIndices['Name']] || 'N/A',
+          profileLink: row[colIndices['Profile_link']] || null,
           positionId: row[colIndices['Position_id']] || 'N/A',
           title: row[colIndices['Title']] || 'N/A',
           company: row[colIndices['Current_company']] || 'N/A',
@@ -482,9 +483,14 @@ function generateRecruiterReportHtml(recruiterName, metrics) {
                       aiStatus = '<span style="color: #F44336; font-weight: bold;">❌ Missing</span>';
                     }
                     
+                    // Create hyperlinked name if profile link is available
+                    const candidateName = candidate.profileLink ? 
+                      `<a href="${candidate.profileLink}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: bold;">${candidate.name}</a>` : 
+                      candidate.name;
+                    
                     return `
                       <tr style="background-color: ${bgColor};">
-                        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px;">${candidate.name}</td>
+                        <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px;">${candidateName}</td>
                         <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px;">${candidate.title}</td>
                         <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px;">${candidate.company}</td>
                         <td style="border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; font-size: 12px;">${candidate.sourceName}</td>
