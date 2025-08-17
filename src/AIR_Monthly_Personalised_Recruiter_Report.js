@@ -335,14 +335,20 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
         });
       }
       
-      // Calculate time to invite sent for eligible candidates who received an invite
-      if (aiInterview === 'Y' && profileId && applicationTs) {
+      // Calculate time to invite sent for eligible candidates who received an invite (only since May 1st, 2025)
+      if (aiInterview === 'Y' && profileId && applicationTs && applicationTs >= WEEKLY_REPORTS_CONFIG.HISTORICAL_CUTOFF_DATE) {
         const sentAtDate = interviewSentMap.get(profileId);
         if (sentAtDate) {
           const timeDiffMs = sentAtDate.getTime() - applicationTs.getTime();
-          if (timeDiffMs >= 0) { // Only consider non-negative differences
+          // Only consider reasonable time differences (0 to 365 days)
+          if (timeDiffMs >= 0 && timeDiffMs <= (365 * 24 * 60 * 60 * 1000)) {
             metrics.timeDiffSumMs += timeDiffMs;
             metrics.timeDiffCount++;
+          } else if (timeDiffMs < 0) {
+            // Debug logging for negative time differences
+            if (metrics.timeDiffCount === 0 && index < 3) {
+              Logger.log(`DEBUG: Negative time diff for ${recruiterName} - Profile: ${profileId}, App: ${applicationTs.toISOString()}, Sent: ${sentAtDate.toISOString()}, Diff: ${(timeDiffMs / (1000 * 60 * 60 * 24)).toFixed(1)} days`);
+            }
           }
         } else {
           // Debug logging for first few unmatched profile IDs
