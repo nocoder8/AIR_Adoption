@@ -217,6 +217,17 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
   Logger.log('--- Calculating Recruiter Metrics ---');
   Logger.log(`Interview sent map contains ${interviewSentMap.size} profile IDs`);
   
+  // Debug: Log first few profile IDs from the map
+  let debugCount = 0;
+  for (const [profileId, sentDate] of interviewSentMap) {
+    if (debugCount < 5) {
+      Logger.log(`DEBUG: Interview sent map sample - Profile ID: "${profileId}", Sent Date: ${sentDate.toISOString()}`);
+      debugCount++;
+    } else {
+      break;
+    }
+  }
+  
   const recruiterMetrics = {};
   const currentDate = new Date();
   const fourteenDaysAgo = new Date(currentDate.getTime() - (WEEKLY_REPORTS_CONFIG.RECENT_DAYS * 24 * 60 * 60 * 1000));
@@ -232,6 +243,19 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
     const aiInterview = String(row[colIndices['Ai_interview']] || '').trim().toUpperCase();
     const applicationTs = vsParseDateSafeRB(row[colIndices['Application_ts']]);
     const profileId = row[colIndices['Profile_id']]?.toString().trim();
+    
+    // Debug logging for Akhila Kashyap specifically
+    if (recruiterName === 'Akhila Kashyap' && aiInterview === 'Y') {
+      Logger.log(`DEBUG AKHILA: Profile ID: "${profileId}", App Date: ${applicationTs ? applicationTs.toISOString() : 'N/A'}`);
+      if (profileId && interviewSentMap.has(profileId)) {
+        const sentDate = interviewSentMap.get(profileId);
+        const timeDiffMs = sentDate.getTime() - applicationTs.getTime();
+        const timeDiffDays = timeDiffMs / (1000 * 60 * 60 * 24);
+        Logger.log(`DEBUG AKHILA: Found in map! Sent Date: ${sentDate.toISOString()}, Time Diff: ${timeDiffDays.toFixed(1)} days`);
+      } else {
+        Logger.log(`DEBUG AKHILA: Profile ID "${profileId}" NOT found in interview sent map`);
+      }
+    }
     
     // Skip if no recruiter name
     if (!recruiterName) {
@@ -348,6 +372,11 @@ function calculateRecruiterMetrics(appRows, colIndices, interviewSentMap = new M
       if (metrics.timeDiffCount > 0) {
         const avgTimeMs = metrics.timeDiffSumMs / metrics.timeDiffCount;
         metrics.avgTimeToInviteDays = parseFloat((avgTimeMs / (1000 * 60 * 60 * 24)).toFixed(1));
+        
+        // Debug logging for Akhila Kashyap
+        if (Object.keys(recruiterMetrics).find(key => key === 'Akhila Kashyap')) {
+          Logger.log(`DEBUG AKHILA FINAL: Total time diff sum: ${metrics.timeDiffSumMs} ms, Count: ${metrics.timeDiffCount}, Average: ${metrics.avgTimeToInviteDays} days`);
+        }
       } else {
         metrics.avgTimeToInviteDays = null;
       }
@@ -778,6 +807,11 @@ function getInterviewSentTimes() {
             // If we haven't seen this profileId, or if this date is earlier than the stored one
             if (!interviewSentMap.has(profileId) || sentAtDate < interviewSentMap.get(profileId)) {
               interviewSentMap.set(profileId, sentAtDate);
+              
+              // Debug: Log first few entries to see the data format
+              if (validDateCount <= 5) {
+                Logger.log(`DEBUG LOG SHEET: Profile ID: "${profileId}", Raw Sent At: "${rawSentAt}", Parsed Date: ${sentAtDate.toISOString()}`);
+              }
             }
           } else {
             // Logger.log(`Invalid date format for Interview_email_sent_at in log sheet row ${idx + 2}: ${rawSentAt}`); // Potentially noisy
